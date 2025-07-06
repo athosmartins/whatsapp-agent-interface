@@ -2,13 +2,23 @@
 # -----------------------------------------------------------------------------
 import streamlit as st
 import pandas as pd
+from db_loader import get_dataframe
 from datetime import datetime
 import re
 from io import StringIO
 from login_manager import simple_auth
+import json, ast
+
 
 # ───────────────────────── SETTINGS ─────────────────────────────────────────
 LOGIN_ENABLED = False  # flip to True for production
+# Decide dev vs prod by env-var
+DEV = st.secrets.get("ENV", "dev") == "dev"
+
+@st.cache_data
+def load_data():
+    return get_dataframe()          # ← remove dev_mode
+
 
 # ───────────────────────── AUTH (optional) ──────────────────────────────────
 if LOGIN_ENABLED and not simple_auth():
@@ -24,44 +34,6 @@ def dbg(msg: str):
         _logged.add(msg)
         _dbg_panel.write(msg)
 
-# ───────────────────────── SAMPLE DATA (replace with DB) ────────────────────
-@st.cache_data
-def load_sample() -> pd.DataFrame:
-    """Return a single-row example matching the latest schema."""
-    return pd.read_json(
-        StringIO(
-            r"""
-            [
-              {
-                "PictureUrl": "https://pps.whatsapp.net/v/t61.24694-24/463235056_1330030495039995_619627974121266174_n.jpg",
-                "last_message_timestamp": "2024-08-14 07:48:24",
-                "whatsapp_number": "5531994716770",
-                "display_name": "Lili",
-                "expected_name": "Liliane Figueiredo Teixeira",
-                "familiares": "MARIA DE LOURDES AGUIAR (MAE), FRANCISCO AGUIAR DA SILVA (IRMAO), IDELBRANDO LUIZ AGUIAR (IRMAO), LEANDRO ALVARENGA AGUIAR (FILHO), MARCIO EVANDRO DE AGUIAR (IRMAO(A)), RENATO CESAR DE AGUIAR (IRMAO(A)), FUNDACAO MINEIRA DE EDUCACAO E CULTURA (EMPREGADOR), MARCIO JOSE DE AGUIAR (SOCIO(A))",
-                "conversation_history": "[2024-08-14 05:39:29] (Urb.Link): Oi, Liliane! | [2024-08-14 05:39:46] (Urb.Link): Meu nome é Athos, prazer em falar contigo. | [2024-08-14 05:40:01] (Urb.Link): Estou no mercado imobiliário há quase 20 anos e ajudo proprietários de imóveis na Zona Sul a vender suas imóveis para construtoras pelo melhor valor possível. | [2024-08-14 05:40:13] (Urb.Link): Tenho bom relacionamento com *sócios de mais de 30 construtoras em busca de terrenos no Carmo.* | [2024-08-14 05:40:33] (Urb.Link): Seu imóvel na *Rua Caldas 143* está no perfil que muitas destas empresas buscam. | [2024-08-14 05:40:54] (Urb.Link): Você teria interesse que eu *apresente seu imóvel para algumas destas empresas e traga propostas para você?* | [2024-08-14 07:25:02] (Contato): Quem te deu esse número? | [2024-08-14 07:25:13] (Contato): Bom dia | [2024-08-14 07:48:24] (Urb.Link): Bom dia! Usamos uma ferramenta de inteligência de mercado que identifica os proprietários de determinado imóvel e seus possíveis contato.",
-                "classificacao": "Não identificado",
-                "intencao": "N/A",
-                "resposta": "Nós usamos algumas ferramentas de inteligência de mercado, como Serasa, que nos informam possíveis contatos de proprietários de imóveis.",
-                "Razao": "O nome no WhatsApp está vazio e a resposta questiona como o número foi obtido, indicando que não há relação clara com o imóvel ou o nome esperado (Liliane Figueiredo Teixeira).",
-                "pagamento": "Dinheiro",
-                "percepcao_valor_esperado": "Alto",
-                "imovel_em_inventario": true,
-                "IMOVEIS": [
-                    {"BAIRRO": "Gutierrez", "ENDERECO": "Rua Bernardino De Lima 29", "TIPO": "Casa", "AREA TERRENO": 375.0,"ANO CONSTRUCAO": 1979.0, "FRACAO IDEAL": 0.1299}
-                ],
-                "IDADE": 72,
-                "OBITO_PROVAVEL": true,
-                "stakeholder": false,
-                "intermediador": false,
-                "inventario_flag": false,
-                "standby": false,
-                "acoes_urblink": []
-              }
-            ]
-            """
-        )
-    )
 
 # ───────────────────────── CSS OVERRIDES ------------------------------------
 st.markdown(
@@ -160,21 +132,38 @@ def bold_asterisks(text: str) -> str:
     return re.sub(r"\*([^*]+)\*", r"<strong>\1</strong>", text)
 
 
-def parse_chat(raw: str):
+import re
+
+def parse_chat(raw: str) -> list[dict]:
+    """
+    Keep only lines like:
+        [YYYY-MM-DD hh:mm:ss] (Sender): Message…
+    Accepts any mix of  " | "  and/or   newline  as delimiters.
+    Returns a list of dicts: {'ts', 'sender', 'msg'}
+    """
+    if not raw:
+        return []
+
+    # Split on explicit pipe OR on a newline that starts a new bracketed block
+    chunks = re.split(r"\s*\|\s*|\n(?=\[)", str(raw).strip())
+
     msgs = []
-    for part in raw.split(" | "):
-        if "] (" not in part:
-            continue
-        ts_end = part.find("] (")
-        ts = part[1:ts_end]
-        sender = part[ts_end + 3 : part.find("):")]
-        msg = part[part.find("):") + 2:].strip()
-        msgs.append({"ts": ts, "sender": sender, "msg": msg})
+    for part in (c.strip() for c in chunks if c.strip()):
+        m = re.match(r"\[(.*?)\]\s+\((.*?)\):(.*)", part, re.S)
+        if not m:
+            continue              # drop anything that isn’t format A
+        ts, sender, msg = m.groups()
+        msgs.append(
+            {"ts": ts.strip(),
+             "sender": sender.strip(),
+             "msg":   msg.strip()}
+        )
     return msgs
+
 
 # ───────────────────────── STATE INIT ---------------------------------------
 if "df" not in st.session_state:
-    st.session_state.df = load_sample()
+    st.session_state.df = load_data()
 if "idx" not in st.session_state:
     st.session_state.idx = 0
 if "resposta_text" not in st.session_state:
@@ -183,6 +172,18 @@ if "resposta_text" not in st.session_state:
 df   = st.session_state.df
 idx  = st.session_state.idx = min(st.session_state.idx, len(df) - 1)
 row  = df.iloc[idx]
+
+# normalise the one odd column
+if "OBITO PROVAVEL" in df.columns and "OBITO_PROVAVEL" not in df.columns:
+    df = df.rename(columns={"OBITO PROVAVEL": "OBITO_PROVAVEL"})
+
+
+# ── optional debug dump ────────────────────────────────────────────────
+if DEBUG:
+    st.write("Columns in DataFrame:", list(df.columns))
+    st.write("RAW conv:", row.get("conversation_history"))
+
+# ───────────────────────────────────────────────────────────────────────
 
 # --- pre-fill "Resposta" every time we load a new row -----------------------
 if "last_prefill_idx" not in st.session_state or st.session_state.last_prefill_idx != idx:
@@ -196,6 +197,23 @@ with bar_col:
     st.progress((idx + 1) / len(df))
     st.caption(f"{idx + 1}/{len(df)} mensagens processadas")
 st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
+
+# ───────────────────────── NAVIGATION (TOP) ------------------------------
+def _goto_prev():
+    if st.session_state.idx > 0:
+        st.session_state.idx -= 1
+        st.session_state.resposta_text = ""     # safe: runs pre-rerun
+def _goto_next():
+    if st.session_state.idx < len(st.session_state.df) - 1:
+        st.session_state.idx += 1
+        st.session_state.resposta_text = ""
+
+nav_prev, nav_prog, nav_next = st.columns([1, 2, 1])
+with nav_prev:
+    st.button("⬅️ Anterior", disabled=idx == 0, on_click=_goto_prev, use_container_width=True)
+with nav_next:
+    st.button("Próximo ➡️", disabled=idx >= len(df) - 1, on_click=_goto_next, use_container_width=True)
+
 
 # ───────────────────────── CONTACT SECTION ----------------------------------
 hl = build_highlights(row["display_name"], row["expected_name"])
@@ -222,16 +240,84 @@ with c4:
         unsafe_allow_html=True
     )
 with c5:
-    if pd.notna(row["IDADE"]):
-        st.markdown(f"**{int(row['IDADE'])} anos**")
-    st.markdown("✝︎ Provável Óbito" if row["OBITO_PROVAVEL"] else "🌟 Provável vivo")
+    idade = row.get("IDADE")
+    obito = bool(row.get("OBITO_PROVAVEL", False))   # default = False if column missing
+
+    if pd.notna(idade):
+        st.markdown(f"**{int(idade)} anos**")
+
+    st.markdown("✝︎ Provável Óbito" if obito else "🌟 Provável vivo")
 
 
-# ───────────────────────── IMÓVEIS (always visible) -------------------------
-if row.get("IMOVEIS"):
+# ───────────────────────── IMÓVEIS (sempre visível) -------------------------
+import json, ast
+
+def _parse_imoveis(raw):
+    """Converte string/JSON/objeto em lista de dicts ou None."""
+    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
+        return None
+    if isinstance(raw, (list, dict)):
+        return raw
+    if isinstance(raw, str):
+        txt = raw.strip()
+        for loader in (json.loads, ast.literal_eval):
+            try:
+                return loader(txt)
+            except Exception:
+                continue
+    return None
+
+def _fmt(val):
+    """Formata números sem zeros desnecessários."""
+    if isinstance(val, (int, float)):
+        return f"{val:g}"
+    return str(val)
+
+imv_obj = _parse_imoveis(row.get("IMOVEIS"))
+
+# Normalizar para lista
+if isinstance(imv_obj, dict):
+    imv_obj = [imv_obj]
+
+if isinstance(imv_obj, list) and imv_obj:
     st.subheader("🏢 Imóveis")
-    st.table(pd.DataFrame(row["IMOVEIS"]))
+    lines = []
+    for im in imv_obj:
+        ender  = im.get("ENDERECO", "Endereço?")
+        bairro = im.get("BAIRRO",   "Bairro?")
+        # --- Terreno --------------------------------------------------------
+        area_val = im.get("AREA TERRENO", "?")
+        area_txt = f"<strong>Terreno: {_fmt(area_val)} m²</strong>"
+        # --- Fração ideal como % inteiro ------------------------------------
+        fi = im.get("FRACAO IDEAL", "")
+        try:
+            pct = int(round(float(fi) * 100 if float(fi) <= 1 else float(fi)))
+            frac_txt = f"{pct}%"
+        except Exception:
+            frac_txt = str(fi)
+        # --- Tipo construtivo ----------------------------------------------
+        tipo = im.get("TIPO CONSTRUTIVO", "").strip()
+        tipo_txt = f"[{tipo}]" if tipo else ""
+        # --- Linha final ----------------------------------------------------
+        lines.append(
+            f"{ender}, {bairro} – {area_txt} {tipo_txt} (Fração ideal = {frac_txt})"
+        )
 
+
+    # Bullet-list bonitinha
+    st.markdown(
+        "<ul style='margin-top:-0.5rem'>" +
+        "".join(f"<li>{ln}</li>" for ln in lines) +
+        "</ul>",
+        unsafe_allow_html=True,
+    )
+
+elif imv_obj is not None:
+    # fallback
+    st.subheader("🏢 Imóveis (formato desconhecido)")
+    st.write(imv_obj)
+
+# else: não mostra nada quando vazio
 st.markdown("---")
 
 # ───────────────────────── CHAT HISTORY -------------------------------------
@@ -349,17 +435,6 @@ with st.form("main_form"):
 
 st.markdown("---")
 
-# ───────────────────────── NAVIGATION ---------------------------------------
-prev, _, nxt = st.columns([1, 2, 1])
-with prev:
-    if st.button("⬅️ Anterior", disabled=idx == 0):
-        st.session_state.idx -= 1
-        st.session_state.resposta_text = ""
-        st.rerun()
-with nxt:
-    if st.button("Próximo ➡️", disabled=idx >= len(df) - 1):
-        st.session_state.idx += 1
-        st.session_state.resposta_text = ""
-        st.rerun()
+
 
 st.caption(f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}")
