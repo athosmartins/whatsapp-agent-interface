@@ -1,451 +1,371 @@
-# app.py – WhatsApp Agent Interface
-# -----------------------------------------------------------------------------
-import streamlit as st
-import pandas as pd
+# pylint: disable=invalid-name,broad-exception-caught,C0301
+"""
+app.py
+
+Streamlit interface for the WhatsApp Agent:
+– loads and displays conversation data
+– lets you classify, respond, and set flags/status
+– supports dev vs prod login, presets, and custom styling
+"""
+
 from datetime import datetime
-import re, json, ast
-from io import StringIO
 
-from db_loader    import get_dataframe
+import pandas as pd
+import streamlit as st
+
+from config import (
+    ACOES_OPTS,
+    CLASSIFICACAO_OPTS,
+    INTENCAO_OPTS,
+    PAGAMENTO_OPTS,
+    PERCEPCAO_OPTS,
+    PRESET_RESPONSES,
+    STANDBY_REASONS,
+    STATUS_URBLINK_OPTS,
+)
+from db_loader import get_dataframe
 from login_manager import simple_auth
-
-
-# ─── ENV + LOGIN ────────────────────────────────────────────────────────────
-DEV            = st.secrets.get("ENV", "dev") == "dev"   # default → dev
-LOGIN_ENABLED  = not DEV                                 # prod must log in
-
-if LOGIN_ENABLED and not simple_auth():                  # prod ⇒ stop if not authed
-    st.stop()
-
-# ─── FLAGS ──────────────────────────────────────────────────────────────────
-HIGHLIGHT_ENABLE = False      # flip to True to reactivate word highlights
-
-# ─── DATA LOADER (cached) ───────────────────────────────────────────────────
-@st.cache_data
-def load_data():
-    return get_dataframe()    # db_loader handles local vs cloud
-
-# ─── OPTIONAL DEBUG PANEL (dev-only) ────────────────────────────────────────
-DEBUG      = False
-_dbg_panel = None
-_logged: set[str] = set()
-
-if DEV:
-    DEBUG      = st.sidebar.checkbox("🐛 Debug Mode", value=False)
-    _dbg_panel = st.sidebar.expander("🔍 Debug Log", expanded=False) if DEBUG else None
-
-def dbg(msg: str):
-    if DEBUG and msg not in _logged:
-        _logged.add(msg)
-        _dbg_panel.write(msg)
-
-
-# ─── CSS, helper functions, rest of the app … ───────────────────────────────
-
-st.markdown(
-    """
-<style>
-#MainMenu, footer, header{visibility:hidden;}
-.chat-container{background:#fafafa;border:1px solid #e6e9ef;border-radius:8px;padding:1rem;max-height:550px;overflow-y:auto;max-width:800px;margin-left:auto;margin-right:auto;}
-.agent-message{background:#f0f0f0;padding:0.7rem 1rem;border-radius:1rem;margin:0.4rem 0;margin-left:25%;text-align:left;}
-.contact-message{background:#2196f3;color:#fff;padding:0.7rem 1rem;border-radius:1rem;margin:0.4rem 0;margin-right:25%;text-align:left;}
-.timestamp{font-size:0.7rem;color:#999;margin-top:0.25rem;text-align:right;}
-.contact-message .timestamp{color:#e3f2fd;text-align:left;}
-.highlighted{background:#e3f2fd;padding:2px 4px;border-radius:3px;}
-.reason-box{background:#fff3cd;border:1px solid #ffc107;border-radius:0.5rem;padding:1rem;color:#856404;}
-.family-grid{display:flex;flex-direction:column;gap:8px;}
-.family-card{background:#fff;padding:8px 12px;border:1px solid #e6e9ef;border-radius:6px;font-size:0.85rem;line-height:1.3;}
-</style>
-""",
-    unsafe_allow_html=True,
+from styles import STYLES
+from ui_helpers import (
+    apply_preset,
+    bold_asterisks,
+    build_highlights,
+    fmt_num,
+    highlight,
+    parse_chat,
+    parse_familiares_grouped,
+    parse_imoveis,
 )
 
 
-
-# ───────────────────────── HELPER FUNCTIONS ---------------------------------
-
-from collections import OrderedDict
-import re
-
-# --------------------------------------------------------------------------- #
-# Helper – Portuguese-ish proper-case (every word capitalised)                #
-# --------------------------------------------------------------------------- #
-def proper_case_pt(txt: str) -> str:
-    return " ".join(w.capitalize() for w in txt.split())
-
-# --------------------------------------------------------------------------- #
-# Robust parser – handles "REL: name"  +  "name (REL)"  +  continuations      #
-# --------------------------------------------------------------------------- #
-def parse_familiares_grouped(raw: str) -> list[str]:
-    """
-    Example output:
-        ["Mae: Maria De Lourdes Aguiar",
-         "Irmaos: Francisco Aguiar, Idelbrando Luiz Aguiar, ...",
-         "Filho: Leandro Alvarenga Aguiar",
-         "Socio: Marcio Evandro De Aguiar, Renato Cesar De Aguiar, Marcio Jose De Aguiar",
-         "Empregador: Fundacao Mineira De Educacao E Cultura"]
-    """
-    groups: OrderedDict[str, list[str]] = OrderedDict()
-    current = None
-
-    # Split on commas but keep commas inside parentheses intact
-    tokens = re.split(r",(?![^()]*\))", raw)
-
-    for tok in (t.strip() for t in tokens if t.strip()):
-        # 1) "REL: name" pattern ------------------------------------------------
-        if ":" in tok:
-            rel, name = (p.strip() for p in tok.split(":", 1))
-            current = rel.rstrip("sS").capitalize()          # IrmaoS → Irmao
-            groups.setdefault(current, []).append(proper_case_pt(name))
-            continue
-
-        # 2) "name (REL)" pattern ----------------------------------------------
-        m = re.match(r"(.+?)\s+\(([^)]+)\)\s*$", tok)
-        if m:
-            name, rel = m.group(1).strip(), m.group(2).strip()
-            rel = rel.split("(")[0].rstrip("sS").capitalize()  # "IRMAO(A)" → "Irmao"
-            current = rel
-            groups.setdefault(current, []).append(proper_case_pt(name))
-            continue
-
-        # 3) Continuation token -------------------------------------------------
-        if current is None:
-            current = "Outros"
-        groups.setdefault(current, []).append(proper_case_pt(tok))
-
-    return [f"{rel}: {', '.join(nomes)}" for rel, nomes in groups.items()]
+# ─── ENV + LOGIN ────────────────────────────────────────────────────────────
+DEV = st.secrets.get("ENV", "dev") == "dev"
+LOGIN_ENABLED = not DEV
+if LOGIN_ENABLED and not simple_auth():
+    st.stop()
 
 
-
-def build_highlights(*names: str) -> list[str]:
-    words = []
-    for n in names:
-        if n:
-            words.extend(str(n).split())
-            words.append(str(n))
-    return list({w.strip() for w in words if len(w) > 1})
-
-def highlight(text: str, names: list[str]):
-    """Return text with <span class="highlighted">…</span> tags, or plain text."""
-    if not HIGHLIGHT_ENABLE:
-        return text                 #  ←  early-exit: do nothing
-    if not text:
-        return text
-    out = str(text)
-    for n in names:
-        out = re.sub(re.escape(n), f'<span class="highlighted">{n}</span>', out,
-                     flags=re.I)
-    return out
+# ─── STYLES ───────────────────────────────────────────────────────────────
+st.markdown(STYLES, unsafe_allow_html=True)
 
 
-def bold_asterisks(text: str) -> str:
-    """Convert *emphasis* markers to <strong> for HTML rendering."""
-    return re.sub(r"\*([^*]+)\*", r"<strong>\1</strong>", text)
+# ─── FLAGS ──────────────────────────────────────────────────────────────────
+HIGHLIGHT_ENABLE = False
 
 
-import re
-
-def parse_chat(raw: str) -> list[dict]:
-    """
-    Keep only lines like:
-        [YYYY-MM-DD hh:mm:ss] (Sender): Message…
-    Accepts any mix of  " | "  and/or   newline  as delimiters.
-    Returns a list of dicts: {'ts', 'sender', 'msg'}
-    """
-    if not raw:
-        return []
-
-    # Split on explicit pipe OR on a newline that starts a new bracketed block
-    chunks = re.split(r"\s*\|\s*|\n(?=\[)", str(raw).strip())
-
-    msgs = []
-    for part in (c.strip() for c in chunks if c.strip()):
-        m = re.match(r"\[(.*?)\]\s+\((.*?)\):(.*)", part, re.S)
-        if not m:
-            continue              # drop anything that isn’t format A
-        ts, sender, msg = m.groups()
-        msgs.append(
-            {"ts": ts.strip(),
-             "sender": sender.strip(),
-             "msg":   msg.strip()}
-        )
-    return msgs
+# ─── DATA LOADER ────────────────────────────────────────────────────────────
+@st.cache_data
+def load_data():
+    """Load the WhatsApp conversations DataFrame."""
+    return get_dataframe()
 
 
-# ───────────────────────── STATE INIT ---------------------------------------
+# ─── DEBUG PANEL (dev‐only) ─────────────────────────────────────────────────
+DEBUG = False
+debug_panel = None
+logged_messages: set[str] = set()
+
+if DEV:
+    DEBUG = st.sidebar.checkbox("🐛 Debug Mode", value=False)
+    if DEBUG:
+        debug_panel = st.sidebar.expander("🔍 Debug Log", expanded=False)
+
+
+def dbg(message: str):
+    """Write a debug message once to the sidebar panel."""
+    if DEBUG and debug_panel and message not in logged_messages:
+        logged_messages.add(message)
+        debug_panel.write(message)
+
+
+# ─── STATE INIT ─────────────────────────────────────────────────────────────
 if "df" not in st.session_state:
     st.session_state.df = load_data()
 if "idx" not in st.session_state:
     st.session_state.idx = 0
 if "resposta_text" not in st.session_state:
-    st.session_state.resposta_text = ""   # will be filled later
+    st.session_state.resposta_text = ""
 
-df   = st.session_state.df
-idx  = st.session_state.idx = min(st.session_state.idx, len(df) - 1)
-row  = df.iloc[idx]
+df = st.session_state.df
+st.session_state.idx = min(st.session_state.idx, len(df) - 1)
+idx = st.session_state.idx
+row = df.iloc[idx]
 
-# normalise the one odd column
+# Prefill “Resposta” from the DataFrame, once per new idx
+if (
+    "last_prefill_idx" not in st.session_state
+    or st.session_state.last_prefill_idx != idx
+):
+    st.session_state.resposta_text = row["resposta"]
+    st.session_state.last_prefill_idx = idx
+
+# Normalize odd column name
 if "OBITO PROVAVEL" in df.columns and "OBITO_PROVAVEL" not in df.columns:
     df = df.rename(columns={"OBITO PROVAVEL": "OBITO_PROVAVEL"})
 
 
-# ── optional debug dump ────────────────────────────────────────────────
-if DEBUG:
-    st.write("Columns in DataFrame:", list(df.columns))
-    st.write("RAW conv:", row.get("conversation_history"))
-
-# ───────────────────────────────────────────────────────────────────────
-
-# --- pre-fill "Resposta" every time we load a new row -----------------------
-if "last_prefill_idx" not in st.session_state or st.session_state.last_prefill_idx != idx:
-    st.session_state.resposta_text = row["resposta"]
-    st.session_state.last_prefill_idx = idx
-
-# ───────────────────────── HEADER & PROGRESS --------------------------------
-st.title("📱 WhatsApp Agent Interface (DEV)")
-_, bar_col, _ = st.columns([1, 2, 1])
-with bar_col:
+# ─── HEADER & PROGRESS ──────────────────────────────────────────────────────
+st.title("📱 WhatsApp Agent Interface")
+_, progress_col, _ = st.columns([1, 2, 1])
+with progress_col:
     st.progress((idx + 1) / len(df))
     st.caption(f"{idx + 1}/{len(df)} mensagens processadas")
 st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
 
-# ───────────────────────── NAVIGATION (TOP) ------------------------------
-def _goto_prev():
-    if st.session_state.idx > 0:
-        st.session_state.idx -= 1
-        st.session_state.resposta_text = ""     # safe: runs pre-rerun
-def _goto_next():
-    if st.session_state.idx < len(st.session_state.df) - 1:
-        st.session_state.idx += 1
-        st.session_state.resposta_text = ""
 
-nav_prev, nav_prog, nav_next = st.columns([1, 2, 1])
-with nav_prev:
-    st.button("⬅️ Anterior", disabled=idx == 0, on_click=_goto_prev, use_container_width=True)
-with nav_next:
-    st.button("Próximo ➡️", disabled=idx >= len(df) - 1, on_click=_goto_next, use_container_width=True)
+# ─── NAVIGATION TOP ─────────────────────────────────────────────────────────
+def goto_prev():
+    """Go to the previous conversation."""
+    st.session_state.idx = max(st.session_state.idx - 1, 0)
 
 
-# ───────────────────────── CONTACT SECTION ----------------------------------
-hl = build_highlights(row["display_name"], row["expected_name"])
+def goto_next():
+    """Go to the next conversation."""
+    st.session_state.idx = min(st.session_state.idx + 1, len(df) - 1)
 
-c1, c2, c3, c4, c5 = st.columns([1, 2, 2, 4, 2])
-with c1:
-    if row.get("PictureUrl"):
-        st.image(row["PictureUrl"], width=80)
+
+nav_prev_col, _, nav_next_col = st.columns([1, 2, 1])
+with nav_prev_col:
+    st.button(
+        "⬅️ Anterior",
+        key="top_prev",
+        disabled=idx == 0,
+        on_click=goto_prev,
+        use_container_width=True,
+    )
+with nav_next_col:
+    st.button(
+        "Próximo ➡️",
+        key="top_next",
+        disabled=idx >= len(df) - 1,
+        on_click=goto_next,
+        use_container_width=True,
+    )
+
+
+# ─── CONTACT SECTION ────────────────────────────────────────────────────────
+hl_words = build_highlights(row["display_name"], row["expected_name"])
+col1, col2, col3, col4, col5 = st.columns([1, 2, 2, 4, 2])
+
+with col1:
+    picture = row.get("PictureUrl")
+    if picture:
+        st.image(picture, width=80)
     else:
         st.markdown("👤")
-with c2:
+
+with col2:
     st.markdown("**Nome no WhatsApp**")
-    st.markdown(highlight(row["display_name"], hl), unsafe_allow_html=True)
-with c3:
+    if HIGHLIGHT_ENABLE:
+        st.markdown(highlight(row["display_name"], hl_words), unsafe_allow_html=True)
+    else:
+        st.markdown(row["display_name"])
+
+with col3:
     st.markdown("**Nome Esperado**")
-    st.markdown(highlight(row["expected_name"], hl), unsafe_allow_html=True)
-with c4:
+    st.markdown(highlight(row["expected_name"], hl_words), unsafe_allow_html=True)
+
+with col4:
     st.markdown("**Familiares**")
-    fam_cards = parse_familiares_grouped(row["familiares"])
-    st.markdown(
-        '<div class="family-grid">' +
-        "".join(f'<div class="family-card">{highlight(card, hl)}</div>' for card in fam_cards) +
-        '</div>',
-        unsafe_allow_html=True
+    for card in parse_familiares_grouped(row["familiares"]):
+        st.markdown(f"- {card}")
+
+with col5:
+    age = row.get("IDADE")
+    if pd.notna(age):
+        st.markdown(f"**{int(age)} anos**")
+    alive_status = (
+        "✝︎ Provável Óbito" if row.get("OBITO_PROVAVEL", False) else "🌟 Provável vivo"
     )
-with c5:
-    idade = row.get("IDADE")
-    obito = bool(row.get("OBITO_PROVAVEL", False))   # default = False if column missing
-
-    if pd.notna(idade):
-        st.markdown(f"**{int(idade)} anos**")
-
-    st.markdown("✝︎ Provável Óbito" if obito else "🌟 Provável vivo")
+    st.markdown(alive_status)
 
 
-# ───────────────────────── IMÓVEIS (sempre visível) -------------------------
-import json, ast
+# ─── IMÓVEIS ────────────────────────────────────────────────────────────────
+imoveis = parse_imoveis(row.get("IMOVEIS"))
+if isinstance(imoveis, dict):
+    imoveis = [imoveis]
+elif not isinstance(imoveis, list):
+    imoveis = []
 
-def _parse_imoveis(raw):
-    """Converte string/JSON/objeto em lista de dicts ou None."""
-    if raw is None or (isinstance(raw, float) and pd.isna(raw)):
-        return None
-    if isinstance(raw, (list, dict)):
-        return raw
-    if isinstance(raw, str):
-        txt = raw.strip()
-        for loader in (json.loads, ast.literal_eval):
-            try:
-                return loader(txt)
-            except Exception:
-                continue
-    return None
-
-def _fmt(val):
-    """Formata números sem zeros desnecessários."""
-    if isinstance(val, (int, float)):
-        return f"{val:g}"
-    return str(val)
-
-imv_obj = _parse_imoveis(row.get("IMOVEIS"))
-
-# Normalizar para lista
-if isinstance(imv_obj, dict):
-    imv_obj = [imv_obj]
-
-if isinstance(imv_obj, list) and imv_obj:
+if imoveis:
     st.subheader("🏢 Imóveis")
-    lines = []
-    for im in imv_obj:
-        ender  = im.get("ENDERECO", "Endereço?")
-        bairro = im.get("BAIRRO",   "Bairro?")
-        # --- Terreno --------------------------------------------------------
-        area_val = im.get("AREA TERRENO", "?")
-        area_txt = f"<strong>Terreno: {_fmt(area_val)} m²</strong>"
-        # --- Fração ideal como % inteiro ------------------------------------
-        fi = im.get("FRACAO IDEAL", "")
+    for item in imoveis:
+        if not isinstance(item, dict):
+            continue
+        area = fmt_num(item.get("AREA TERRENO", "?"))
+        fraction = item.get("FRACAO IDEAL", "")
         try:
-            pct = int(round(float(fi) * 100 if float(fi) <= 1 else float(fi)))
-            frac_txt = f"{pct}%"
-        except Exception:
-            frac_txt = str(fi)
-        # --- Tipo construtivo ----------------------------------------------
-        tipo = im.get("TIPO CONSTRUTIVO", "").strip()
-        tipo_txt = f"[{tipo}]" if tipo else ""
-        # --- Linha final ----------------------------------------------------
-        lines.append(
-            f"{ender}, {bairro} – {area_txt} {tipo_txt} (Fração ideal = {frac_txt})"
+            fraction_percent = f"{int(round(float(fraction) * 100 if float(fraction) <= 1 else float(fraction)))}%"
+        except (ValueError, TypeError):
+            fraction_percent = str(fraction)
+        build_type = item.get("TIPO CONSTRUTIVO", "").strip()
+        address = item.get("ENDERECO", "?")
+        neighborhood = item.get("BAIRRO", "?")
+        st.markdown(
+            f"{address}, {neighborhood} – "
+            f"**Terreno: {area} m²**{(' [' + build_type + ']') if build_type else ''}"
+            f" (Fração ideal: {fraction_percent})",
+            unsafe_allow_html=True,
         )
 
-
-    # Bullet-list bonitinha
-    st.markdown(
-        "<ul style='margin-top:-0.5rem'>" +
-        "".join(f"<li>{ln}</li>" for ln in lines) +
-        "</ul>",
-        unsafe_allow_html=True,
-    )
-
-elif imv_obj is not None:
-    # fallback
-    st.subheader("🏢 Imóveis (formato desconhecido)")
-    st.write(imv_obj)
-
-# else: não mostra nada quando vazio
 st.markdown("---")
 
-# ───────────────────────── CHAT HISTORY -------------------------------------
-chat_html = '<div class="chat-container">'
-for m in parse_chat(row["conversation_history"]):
-    cls = "agent-message" if m["sender"] in ("Urb.Link", "Athos") else "contact-message"
-    msg_html = bold_asterisks(m["msg"])
-    chat_html += f'<div class="{cls}">{msg_html}<div class="timestamp">{m["ts"]}</div></div>'
-chat_html += '</div>'
 
+# ─── CHAT HISTORY ───────────────────────────────────────────────────────────
+chat_html = "<div class='chat-container'>"
+for msg in parse_chat(row["conversation_history"]):
+    msg_class = (
+        "agent-message" if msg["sender"] in ("Urb.Link", "Athos") else "contact-message"
+    )
+    chat_html += f"<div class='{msg_class}'>{bold_asterisks(msg['msg'])}"
+    chat_html += f"<div class='timestamp'>{msg['ts']}</div></div>"
+chat_html += "</div>"
 st.markdown(chat_html, unsafe_allow_html=True)
 
 st.markdown("---")
-# ───────────────────────── RACIONAL -----------------------------------------
+
+
+# ─── RAZÃO ─────────────────────────────────────────────────────────────────
 st.subheader("📋 Racional usado pela AI classificadora")
-st.markdown(f'<div class="reason-box">{row["Razao"]}</div>', unsafe_allow_html=True)
+st.markdown(f"<div class='reason-box'>{row['Razao']}</div>", unsafe_allow_html=True)
 
 st.markdown("---")
 
-# ───────────────────────── CLASSIFICAÇÃO & RESPOSTA -------------------------
+
+# ─── CLASSIFICAÇÃO & RESPOSTA ───────────────────────────────────────────────
 st.subheader("📝 Classificação e Resposta")
 
-preset_responses = {
-    "": "Selecione uma resposta pronta",
-    "obrigado": "Muito obrigado pelo retorno! Tenha um ótimo dia 😊",
-    "inteligencia": "Nós usamos algumas ferramentas de inteligência de mercado, como Serasa, que nos informam possíveis contatos de proprietários de imóveis.",
-    "proposta": "Gostaria de apresentar uma proposta para seu imóvel. Quando seria um bom momento para conversarmos?",
-    "followup": "Entendi sua posição. Entrarei em contato em breve caso surjam novas oportunidades."
-}
+# Presets dropdown (outside the form)
+st.selectbox(
+    "Respostas Prontas",
+    options=list(PRESET_RESPONSES.keys()),
+    format_func=lambda tag: tag or "-- selecione uma resposta pronta --",
+    key="preset_key",
+    on_change=apply_preset,
+)
 
-acoes_opts   = ["Enviar proposta", "Agendar visita", "Aguardar retorno", "Marcar follow-up", "Descartar"]
-pg_opts      = ["Dinheiro", "Permuta no local", "Permuta fora", "Permuta pronta"]
-percep_opts  = ["Ótimo", "Bom", "Alto", "Inviável"]
 
 with st.form("main_form"):
-    left, right = st.columns(2)
+    left_col, right_col = st.columns(2)
 
-    # LEFT COL ---------------------------------------------------------------
-    with left:
-        # class / intencao
-        cls_opts = ["Proprietário", "Herdeiro / Futuro herdeiro", "Parente / Conhecido",
-                    "Ex-proprietário", "Sem relação com imóvel", "Não identificado"]
-        classificacao = st.selectbox(
-            "Classificação",
-            cls_opts,
-            index=cls_opts.index(row["classificacao"]) if row["classificacao"] in cls_opts else 5
+    with left_col:
+        classificacao_sel = st.selectbox(
+            "🏷️ Classificação",
+            CLASSIFICACAO_OPTS,
+            index=(
+                CLASSIFICACAO_OPTS.index(row["classificacao"])
+                if row["classificacao"] in CLASSIFICACAO_OPTS
+                else 0
+            ),
+        )
+        intencao_sel = st.selectbox(
+            "🔍 Intenção",
+            INTENCAO_OPTS,
+            index=(
+                INTENCAO_OPTS.index(row["intencao"])
+                if row["intencao"] in INTENCAO_OPTS
+                else 0
+            ),
+        )
+        acoes_sel = st.multiselect(
+            "📞 Ações",
+            ACOES_OPTS,
+            default=row.get("acoes_urblink", []),
         )
 
-        int_opts = ["Aberto a Proposta", "Aberto a Proposta, outros não", "Não receptivo a venda",
-                    "Pretende vender no futuro", "Vendido para Construtora", "Está em negociação (FUP 30d)",
-                    "Passou contato stakeholder", "Sem contato", "Entendendo situação", "N/A"]
-        intencao = st.selectbox(
-            "Intenção",
-            int_opts,
-            index=int_opts.index(row["intencao"]) if row["intencao"] in int_opts else 9
+        st.selectbox(
+            "🚦 Status Urb.Link",
+            STATUS_URBLINK_OPTS,
+            index=(
+                STATUS_URBLINK_OPTS.index(row.get("status_urblink"))
+                if row.get("status_urblink") in STATUS_URBLINK_OPTS
+                else 0
+            ),
+            key="status_urblink",
         )
 
-        # Flags
-        stakeholder   = st.checkbox("Stakeholder",   value=row.get("stakeholder", False))
-        intermediador = st.checkbox("Intermediador", value=row.get("intermediador", False))
-        inventario_f  = st.checkbox("Inventário",    value=row.get("inventario_flag", False))
-        standby_f     = st.checkbox("Stand-by",      value=row.get("standby", False))
-
-        acoes_sel = st.multiselect("Ações Urb.Link", acoes_opts, default=row.get("acoes_urblink", []))
-
-        # NEW – Pagamento (multi) + Percepção (single) – always visible
-        pg_current = [p.strip() for p in (row.get("pagamento") or "").split(",") if p.strip()]
-        pagamento_sel = st.multiselect("Pagamento (múltiplo)", pg_opts, default=pg_current)
-
-        percepcao_val = st.selectbox(
-            "Percepção de Valor",
-            percep_opts,
-            index=percep_opts.index(row.get("percepcao_valor_esperado", "Bom"))
-            if row.get("percepcao_valor_esperado") in percep_opts else 1
+        pagamento_sel = st.multiselect(
+            "💳 Forma de Pagamento",
+            PAGAMENTO_OPTS,
+            default=[
+                p.strip() for p in (row.get("pagamento") or "").split(",") if p.strip()
+            ],
+        )
+        percepcao_sel = st.selectbox(
+            "💎 Percepção de Valor",
+            PERCEPCAO_OPTS,
+            index=(
+                PERCEPCAO_OPTS.index(
+                    row.get("percepcao_valor_esperado", PERCEPCAO_OPTS[0])
+                )
+                if row.get("percepcao_valor_esperado") in PERCEPCAO_OPTS
+                else 0
+            ),
         )
 
-    # RIGHT COL --------------------------------------------------------------
-    with right:
-        preset_key = st.selectbox("Respostas Prontas",
-                                  list(preset_responses.keys()),
-                                  format_func=lambda k: preset_responses[k])
+        razao_sel = st.multiselect(
+            "🤔 Razão Stand-by",
+            STANDBY_REASONS,
+            default=row.get("razao_standby", []),
+            key="razao_standby",
+        )
 
-        # ── Header (label + trash button) BEFORE the textarea ───────────────
-        lbl_col, trash_col = st.columns([6, 1])
-        with lbl_col:
-            st.markdown("**Resposta**")
-        with trash_col:
-            clear_clicked = st.form_submit_button("🗑️", help="Apagar Resposta")
 
-        # Clear logic happens BEFORE instantiating the text_area
-        if clear_clicked:
-            st.session_state.resposta_text = ""
 
-        # Determine default text
-        if st.session_state.resposta_text == "":
-            default_resp = preset_responses[preset_key] if preset_key else row["resposta"]
-        else:
-            default_resp = st.session_state.resposta_text
-
-        resposta = st.text_area(
-            "Resposta (hidden)",         # a11y label
-            value=default_resp,
-            height=180,
+    with right_col:
+        st.text_area(
+            "✏️ Resposta",
+            value=st.session_state.resposta_text,
             key="resposta_text",
-            label_visibility="collapsed"
+            height=180,
         )
 
-    # FOOTER BUTTON (SAVE) ---------------------------------------------------
-    salvar = st.form_submit_button("💾 Salvar Alterações")
+        st.text_area(
+            "📋 OBS", 
+            value="",
+            height=120,
+            key="obs",
+        )
 
-    if salvar:
-        # In real use: persist everything to DB — here we just mimic
-        dbg(f"Saved → cls={classificacao}, int={intencao}, pg={pagamento_sel}, perc={percepcao_val}")
-        st.success("Alterações salvas (mock)")
+        st.checkbox(
+            "Stakeholder", value=row.get("stakeholder", False), key="stakeholder"
+        )
+        st.checkbox(
+            "Intermediador", value=row.get("intermediador", False), key="intermediador"
+        )
+        st.checkbox(
+            "Inventário", value=row.get("inventario_flag", False), key="inventario_flag"
+        )
+        st.checkbox(
+            "Stand-by", value=row.get("standby", False), key="standby"
+        )
 
+        salvar = st.form_submit_button("💾 Salvar Alterações")
+        if salvar:
+            dbg("Saved changes")
+            st.success("Alterações salvas (mock)")
+
+# ─── NAVIGATION BOTTOM ──────────────────────────────────────────────────────
 st.markdown("---")
+bot_prev_col, _, bot_next_col = st.columns([1, 2, 1])
+with bot_prev_col:
+    st.button(
+        "⬅️ Anterior",
+        key="bottom_prev",
+        disabled=idx == 0,
+        on_click=goto_prev,
+        use_container_width=True,
+    )
+with bot_next_col:
+    st.button(
+        "Próximo ➡️",
+        key="bottom_next",
+        disabled=idx >= len(df) - 1,
+        on_click=goto_next,
+        use_container_width=True,
+    )
 
-
-
-st.caption(f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}")
+# ─── FOOTER CAPTION ─────────────────────────────────────────────────────────
+st.caption(
+    f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}"
+)
