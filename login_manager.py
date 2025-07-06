@@ -74,7 +74,8 @@ def simple_auth() -> bool:
                         key="set_auth_cookie",
                         path="/",
                         same_site="Lax",
-                        secure=False,
+                        secure=True,                          # ← must be True on HTTPS
+                        domain="urblink-chat.streamlit.app",  # ← your exact host (no scheme)
                     )
                     cookie_manager.set(
                         "urb_link_username", user,
@@ -82,7 +83,8 @@ def simple_auth() -> bool:
                         key="set_user_cookie",
                         path="/",
                         same_site="Lax",
-                        secure=False,
+                        secure=True,                          # ← must be True on HTTPS
+                        domain="urblink-chat.streamlit.app",  # ← your exact host (no scheme)
                     )
 
 
