@@ -1,38 +1,38 @@
-# app.py – WhatsApp Agent Interface (DEV-ready, full feature set)
+# app.py – WhatsApp Agent Interface
 # -----------------------------------------------------------------------------
 import streamlit as st
 import pandas as pd
-from db_loader import get_dataframe
 from datetime import datetime
-import re
+import re, json, ast
 from io import StringIO
+
+from db_loader    import get_dataframe
 from login_manager import simple_auth
-import json, ast
 
 
-# ───────────────────────── SETTINGS ─────────────────────────────────────────
-LOGIN_ENABLED = False  # flip to True for production
-# Decide dev vs prod by env-var
-DEV = st.secrets.get("ENV", "dev") == "dev"
+# ─── ENV + LOGIN ────────────────────────────────────────────────────────────
+DEV            = st.secrets.get("ENV", "dev") == "dev"   # default → dev
+LOGIN_ENABLED  = not DEV                                 # prod must log in
 
-@st.cache_data
-def load_data():
-    return get_dataframe()          # ← remove dev_mode
-
-
-# ───────────────────────── AUTH (optional) ──────────────────────────────────
-if LOGIN_ENABLED and not simple_auth():
+if LOGIN_ENABLED and not simple_auth():                  # prod ⇒ stop if not authed
     st.stop()
 
-# ───────────────────── DEBUG TOGGLE ──────────────────────
+# ─── FLAGS ──────────────────────────────────────────────────────────────────
+HIGHLIGHT_ENABLE = False      # flip to True to reactivate word highlights
+
+# ─── DATA LOADER (cached) ───────────────────────────────────────────────────
+@st.cache_data
+def load_data():
+    return get_dataframe()    # db_loader handles local vs cloud
+
+# ─── OPTIONAL DEBUG PANEL (dev-only) ────────────────────────────────────────
 DEBUG      = False
 _dbg_panel = None
-_logged: set[str] = set()          #  ←  restore this line
+_logged: set[str] = set()
 
-if DEV:                                   # ← only in dev
-    DEBUG = st.sidebar.checkbox("🐛 Debug Mode", value=False)
-    _dbg_panel = (st.sidebar.expander("🔍 Debug Log", expanded=False)
-                  if DEBUG else None)
+if DEV:
+    DEBUG      = st.sidebar.checkbox("🐛 Debug Mode", value=False)
+    _dbg_panel = st.sidebar.expander("🔍 Debug Log", expanded=False) if DEBUG else None
 
 def dbg(msg: str):
     if DEBUG and msg not in _logged:
@@ -40,8 +40,8 @@ def dbg(msg: str):
         _dbg_panel.write(msg)
 
 
+# ─── CSS, helper functions, rest of the app … ───────────────────────────────
 
-# ───────────────────────── CSS OVERRIDES ------------------------------------
 st.markdown(
     """
 <style>
@@ -126,12 +126,17 @@ def build_highlights(*names: str) -> list[str]:
     return list({w.strip() for w in words if len(w) > 1})
 
 def highlight(text: str, names: list[str]):
+    """Return text with <span class="highlighted">…</span> tags, or plain text."""
+    if not HIGHLIGHT_ENABLE:
+        return text                 #  ←  early-exit: do nothing
     if not text:
         return text
     out = str(text)
     for n in names:
-        out = re.sub(re.escape(n), f'<span class="highlighted">{n}</span>', out, flags=re.I)
+        out = re.sub(re.escape(n), f'<span class="highlighted">{n}</span>', out,
+                     flags=re.I)
     return out
+
 
 def bold_asterisks(text: str) -> str:
     """Convert *emphasis* markers to <strong> for HTML rendering."""
