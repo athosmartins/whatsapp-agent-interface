@@ -1,4 +1,10 @@
-# pylint: disable=invalid-name,broad-exception-caught,C0301
+# pylint: disable=invalid-name,
+#               broad-exception-caught,
+#               C0301,  # line-too-long
+#               C0114,  # missing-module-docstring
+#               C0116,  # missing-function-docstring
+#               E0602   # undefined-variable
+
 """
 app.py
 
@@ -9,9 +15,9 @@ Streamlit interface for the WhatsApp Agent:
 """
 
 from datetime import datetime
-
 import pandas as pd
 import streamlit as st
+import extra_streamlit_components as stx
 
 from config import (
     ACOES_OPTS,
@@ -37,12 +43,22 @@ from ui_helpers import (
     parse_imoveis,
 )
 
-
-# ─── ENV + LOGIN ────────────────────────────────────────────────────────────
+# ─── ENV + LOGIN + COOKIE AUTH ───────────────────────────────────────────────
 DEV = st.secrets.get("ENV", "dev") == "dev"
 LOGIN_ENABLED = not DEV
-if LOGIN_ENABLED and not simple_auth():
-    st.stop()
+
+# we only need a Boolean flag cookie
+cookie_manager = stx.CookieManager()
+# cookie_manager.delayed_init()  # not needed with the latest API
+
+if LOGIN_ENABLED:
+    logged = cookie_manager.get("urb_link_authenticated")
+    if not logged:
+        # first time, or user cleared cookies → force login
+        if not simple_auth():
+            st.stop()
+        # mark them as authenticated for next time
+        cookie_manager.set("urb_link_authenticated", "1")
 
 
 # ─── STYLES ───────────────────────────────────────────────────────────────
@@ -267,50 +283,68 @@ with st.form("main_form"):
                 else 0
             ),
         )
+
+        # ensure we only default to a list if row["acoes_urblink"] is actually a list
+        acoes_default = (
+            row.get("acoes_urblink")
+            if isinstance(row.get("acoes_urblink"), list)
+            else []
+        )
         acoes_sel = st.multiselect(
-            "📞 Ações",
+            "📞 Ações Urb.Link",
             ACOES_OPTS,
-            default=row.get("acoes_urblink", []),
+            default=acoes_default,
+            key="acoes_urblink",
         )
 
-        st.selectbox(
+        status_opts = [""] + STATUS_URBLINK_OPTS
+        current_status = row.get("status_urblink", "")
+        # if DF has a real status use its index+1, otherwise stay at 0 (the blank)
+        status_index = (
+            status_opts.index(current_status) if current_status in status_opts else 0
+        )
+
+        status = st.selectbox(
             "🚦 Status Urb.Link",
-            STATUS_URBLINK_OPTS,
-            index=(
-                STATUS_URBLINK_OPTS.index(row.get("status_urblink"))
-                if row.get("status_urblink") in STATUS_URBLINK_OPTS
-                else 0
-            ),
+            status_opts,
+            index=status_index,
             key="status_urblink",
         )
 
+        pag_default = row.get("pagamento") or ""
+        pag_default = [p.strip() for p in pag_default.split(",") if p.strip()]
         pagamento_sel = st.multiselect(
             "💳 Forma de Pagamento",
             PAGAMENTO_OPTS,
-            default=[
-                p.strip() for p in (row.get("pagamento") or "").split(",") if p.strip()
-            ],
-        )
-        percepcao_sel = st.selectbox(
-            "💎 Percepção de Valor",
-            PERCEPCAO_OPTS,
-            index=(
-                PERCEPCAO_OPTS.index(
-                    row.get("percepcao_valor_esperado", PERCEPCAO_OPTS[0])
-                )
-                if row.get("percepcao_valor_esperado") in PERCEPCAO_OPTS
-                else 0
-            ),
+            default=pag_default,
+            key="pagamento",
         )
 
+        percepcao_opts = [""] + PERCEPCAO_OPTS
+        current_perc = row.get("percepcao_valor_esperado", "")
+        percepcao_index = (
+            percepcao_opts.index(current_perc) if current_perc in percepcao_opts else 0
+        )
+
+        percepcao_sel = st.selectbox(
+            "💎 Percepção de Valor",
+            percepcao_opts,
+            index=percepcao_index,
+            key="percepcao_valor_esperado",
+        )
+
+        razao_default = (
+            row.get("razao_standby")
+            if isinstance(row.get("razao_standby"), list)
+            else []
+        )
+        
         razao_sel = st.multiselect(
             "🤔 Razão Stand-by",
             STANDBY_REASONS,
-            default=row.get("razao_standby", []),
+            default=razao_default,
             key="razao_standby",
         )
-
-
 
     with right_col:
         st.text_area(
@@ -321,7 +355,7 @@ with st.form("main_form"):
         )
 
         st.text_area(
-            "📋 OBS", 
+            "📋 OBS",
             value="",
             height=120,
             key="obs",
@@ -336,9 +370,7 @@ with st.form("main_form"):
         st.checkbox(
             "Inventário", value=row.get("inventario_flag", False), key="inventario_flag"
         )
-        st.checkbox(
-            "Stand-by", value=row.get("standby", False), key="standby"
-        )
+        st.checkbox("Stand-by", value=row.get("standby", False), key="standby")
 
         salvar = st.form_submit_button("💾 Salvar Alterações")
         if salvar:

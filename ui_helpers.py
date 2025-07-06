@@ -14,8 +14,7 @@ from collections import OrderedDict
 
 import pandas as pd
 import streamlit as st
-
-from config import PRESET_RESPONSES as preset_responses
+from config import PRESET_RESPONSES
 
 # toggle highlighting globally
 HIGHLIGHT_ENABLE = False
@@ -142,4 +141,4 @@ def apply_preset() -> None:
     pull the chosen key from session and set sessão.resposta_text.
     """
     sel = st.session_state.get("preset_key", "")
-    st.session_state.resposta_text = preset_responses.get(sel, "")
+    st.session_state.resposta_text = PRESET_RESPONSES.get(sel, "")
