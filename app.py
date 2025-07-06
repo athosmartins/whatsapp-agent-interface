@@ -1,23 +1,15 @@
-# pylint: disable=invalid-name,
-#               broad-exception-caught,
-#               C0301,  # line-too-long
-#               C0114,  # missing-module-docstring
-#               C0116,  # missing-function-docstring
-#               E0602   # undefined-variable
+# pylint: disable=invalid-name,broad-exception-caught,C0301,C0114,C0116,E0602,E1101
 
 """
 app.py
 
-Streamlit interface for the WhatsApp Agent:
-– loads and displays conversation data
-– lets you classify, respond, and set flags/status
-– supports dev vs prod login, presets, and custom styling
+Streamlit interface for the WhatsApp Agent with persistent cookie authentication
 """
 
-from datetime import datetime
-import pandas as pd
+from datetime import datetime, timedelta
 import streamlit as st
-import extra_streamlit_components as stx
+import pandas as pd
+import time
 
 from config import (
     ACOES_OPTS,
@@ -43,30 +35,21 @@ from ui_helpers import (
     parse_imoveis,
 )
 
-# ─── ENV + LOGIN + COOKIE AUTH ───────────────────────────────────────────────
-DEV = st.secrets.get("ENV", "dev") == "dev"
-LOGIN_ENABLED = not DEV
+# ─── PAGE CONFIG (MUST BE FIRST) ────────────────────────────────────────
+st.set_page_config(page_title="WhatsApp Agent Interface", page_icon="📱", layout="wide")
 
-# we only need a Boolean flag cookie
-cookie_manager = stx.CookieManager()
-# cookie_manager.delayed_init()  # not needed with the latest API
+# ─── AUTHENTICATION ─────────────────────────────────────────────────────
+# Check authentication (this now includes cookie checking)
+if not simple_auth():
+    st.stop()
 
-if LOGIN_ENABLED:
-    logged = cookie_manager.get("urb_link_authenticated")
-    if not logged:
-        # first time, or user cleared cookies → force login
-        if not simple_auth():
-            st.stop()
-        # mark them as authenticated for next time
-        cookie_manager.set("urb_link_authenticated", "1")
-
-
-# ─── STYLES ───────────────────────────────────────────────────────────────
+# ─── AUTHENTICATED APP STARTS HERE ──────────────────────────────────────
+# Apply styles
 st.markdown(STYLES, unsafe_allow_html=True)
-
 
 # ─── FLAGS ──────────────────────────────────────────────────────────────────
 HIGHLIGHT_ENABLE = False
+DEV = False  # Set based on your environment
 
 
 # ─── DATA LOADER ────────────────────────────────────────────────────────────
@@ -79,7 +62,7 @@ def load_data():
 # ─── DEBUG PANEL (dev‐only) ─────────────────────────────────────────────────
 DEBUG = False
 debug_panel = None
-logged_messages: set[str] = set()
+logged_messages = set()
 
 if DEV:
     DEBUG = st.sidebar.checkbox("🐛 Debug Mode", value=False)
@@ -107,7 +90,7 @@ st.session_state.idx = min(st.session_state.idx, len(df) - 1)
 idx = st.session_state.idx
 row = df.iloc[idx]
 
-# Prefill “Resposta” from the DataFrame, once per new idx
+# Prefill "Resposta" from the DataFrame, once per new idx
 if (
     "last_prefill_idx" not in st.session_state
     or st.session_state.last_prefill_idx != idx
@@ -118,7 +101,6 @@ if (
 # Normalize odd column name
 if "OBITO PROVAVEL" in df.columns and "OBITO_PROVAVEL" not in df.columns:
     df = df.rename(columns={"OBITO PROVAVEL": "OBITO_PROVAVEL"})
-
 
 # ─── HEADER & PROGRESS ──────────────────────────────────────────────────────
 st.title("📱 WhatsApp Agent Interface")
@@ -158,7 +140,6 @@ with nav_next_col:
         use_container_width=True,
     )
 
-
 # ─── CONTACT SECTION ────────────────────────────────────────────────────────
 hl_words = build_highlights(row["display_name"], row["expected_name"])
 col1, col2, col3, col4, col5 = st.columns([1, 2, 2, 4, 2])
@@ -195,7 +176,6 @@ with col5:
     )
     st.markdown(alive_status)
 
-
 # ─── IMÓVEIS ────────────────────────────────────────────────────────────────
 imoveis = parse_imoveis(row.get("IMOVEIS"))
 if isinstance(imoveis, dict):
@@ -226,7 +206,6 @@ if imoveis:
 
 st.markdown("---")
 
-
 # ─── CHAT HISTORY ───────────────────────────────────────────────────────────
 chat_html = "<div class='chat-container'>"
 for msg in parse_chat(row["conversation_history"]):
@@ -240,13 +219,11 @@ st.markdown(chat_html, unsafe_allow_html=True)
 
 st.markdown("---")
 
-
 # ─── RAZÃO ─────────────────────────────────────────────────────────────────
 st.subheader("📋 Racional usado pela AI classificadora")
 st.markdown(f"<div class='reason-box'>{row['Razao']}</div>", unsafe_allow_html=True)
 
 st.markdown("---")
-
 
 # ─── CLASSIFICAÇÃO & RESPOSTA ───────────────────────────────────────────────
 st.subheader("📝 Classificação e Resposta")
@@ -259,7 +236,6 @@ st.selectbox(
     key="preset_key",
     on_change=apply_preset,
 )
-
 
 with st.form("main_form"):
     left_col, right_col = st.columns(2)
@@ -338,7 +314,7 @@ with st.form("main_form"):
             if isinstance(row.get("razao_standby"), list)
             else []
         )
-        
+
         razao_sel = st.multiselect(
             "🤔 Razão Stand-by",
             STANDBY_REASONS,
