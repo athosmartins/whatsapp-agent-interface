@@ -2,7 +2,9 @@ credentials.json
 *.db
 __pycache__/
 .env
-.streamlit/
+!.streamlit/
+!.streamlit/config.toml
+.streamlit/secrets.toml
 *.pyc
 .DS_Store
 app_gpt.py

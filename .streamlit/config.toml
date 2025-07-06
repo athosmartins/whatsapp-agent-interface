@@ -1,0 +1,6 @@
+[theme]
+base          = "light"      # ← change to "dark" if you ever want dark mode
+primaryColor  = "#ff4b4b"    # optional brand colours
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f5f5f5"
+textColor     = "#262730"
