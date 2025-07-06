@@ -24,15 +24,21 @@ def load_data():
 if LOGIN_ENABLED and not simple_auth():
     st.stop()
 
-# ───────────────────────── DEBUG TOGGLE ─────────────────────────────────────
-DEBUG = st.sidebar.checkbox("🐛 Debug Mode", value=False)
-_dbg_panel = st.sidebar.expander("🔍 Debug Log", expanded=False) if DEBUG else None
-_logged: set[str] = set()
+# ───────────────────── DEBUG TOGGLE ──────────────────────
+DEBUG      = False
+_dbg_panel = None
+_logged: set[str] = set()          #  ←  restore this line
+
+if DEV:                                   # ← only in dev
+    DEBUG = st.sidebar.checkbox("🐛 Debug Mode", value=False)
+    _dbg_panel = (st.sidebar.expander("🔍 Debug Log", expanded=False)
+                  if DEBUG else None)
 
 def dbg(msg: str):
     if DEBUG and msg not in _logged:
         _logged.add(msg)
         _dbg_panel.write(msg)
+
 
 
 # ───────────────────────── CSS OVERRIDES ------------------------------------
