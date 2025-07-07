@@ -10,3 +10,4 @@ __pycache__/
 app_gpt.py
 app_claude.py
 test.py
+CLAUDE.md
