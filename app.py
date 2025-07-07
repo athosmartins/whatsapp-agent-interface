@@ -1,379 +1,170 @@
-# pylint: disable=invalid-name,broad-exception-caught,C0301,C0114,C0116,E0602,E1101
-
-"""
-app.py
-
-Streamlit interface for the WhatsApp Agent with persistent cookie authentication
-"""
-
-from datetime import datetime, timedelta
+# app.py
 import streamlit as st
-import pandas as pd
-import time
+from loaders.db_loader import get_dataframe
+from utils.ui_helpers import parse_imoveis
+import re
 
-from config import (
-    ACOES_OPTS,
-    CLASSIFICACAO_OPTS,
-    INTENCAO_OPTS,
-    PAGAMENTO_OPTS,
-    PERCEPCAO_OPTS,
-    PRESET_RESPONSES,
-    STANDBY_REASONS,
-    STATUS_URBLINK_OPTS,
-)
-from db_loader import get_dataframe
-from login_manager import simple_auth
-from styles import STYLES
-from ui_helpers import (
-    apply_preset,
-    bold_asterisks,
-    build_highlights,
-    fmt_num,
-    highlight,
-    parse_chat,
-    parse_familiares_grouped,
-    parse_imoveis,
-)
+# ─── PAGE CONFIG ─────────────────────────────────────────────────────────
+st.set_page_config(page_title="Home Dashboard", layout="wide")
+st.title("🏠 Home Dashboard")
 
-# ─── PAGE CONFIG (MUST BE FIRST) ────────────────────────────────────────
-st.set_page_config(page_title="WhatsApp Agent Interface", page_icon="📱", layout="wide")
-
-# ─── AUTHENTICATION ─────────────────────────────────────────────────────
-# Check authentication (this now includes cookie checking)
-if not simple_auth():
-    st.stop()
-
-# ─── AUTHENTICATED APP STARTS HERE ──────────────────────────────────────
-# Apply styles
-st.markdown(STYLES, unsafe_allow_html=True)
-
-# ─── FLAGS ──────────────────────────────────────────────────────────────────
-HIGHLIGHT_ENABLE = False
-DEV = False  # Set based on your environment
-
-
-# ─── DATA LOADER ────────────────────────────────────────────────────────────
+# ─── LOAD & CACHE DATA ────────────────────────────────────────────────────
 @st.cache_data
-def load_data():
-    """Load the WhatsApp conversations DataFrame."""
-    return get_dataframe()
+def load_master_df():
+    df = get_dataframe()
+    # Ensure sync-status flags exist
+    if 'sheet_synced' not in df.columns:
+        df['sheet_synced'] = False
+    if 'whatsapp_sent' not in df.columns:
+        df['whatsapp_sent'] = False
+    return df
 
+# Initialize master_df if not exists
+if 'master_df' not in st.session_state:
+    st.session_state.master_df = load_master_df()
 
-# ─── DEBUG PANEL (dev‐only) ─────────────────────────────────────────────────
-DEBUG = False
-debug_panel = None
-logged_messages = set()
+# Work on the master_df
+df = st.session_state.master_df.copy()
 
-if DEV:
-    DEBUG = st.sidebar.checkbox("🐛 Debug Mode", value=False)
-    if DEBUG:
-        debug_panel = st.sidebar.expander("🔍 Debug Log", expanded=False)
+# ─── TRANSFORM COLUMNS ─────────────────────────────────────────────────────
+# 1) Phone formatting: (XX) XXXXX-XXXX
+def format_brazilian_phone(raw: str) -> str:
+    digits = re.sub(r"\D", "", raw or "")
+    # Remove country code if present
+    if digits.startswith('55') and len(digits) > 10:
+        digits = digits[2:]
+    if len(digits) >= 10:
+        area, rest = digits[:2], digits[2:]
+        return f"({area}) {rest[:-4]}-{rest[-4:]}"
+    return raw
 
-
-def dbg(message: str):
-    """Write a debug message once to the sidebar panel."""
-    if DEBUG and debug_panel and message not in logged_messages:
-        logged_messages.add(message)
-        debug_panel.write(message)
-
-
-# ─── STATE INIT ─────────────────────────────────────────────────────────────
-if "df" not in st.session_state:
-    st.session_state.df = load_data()
-if "idx" not in st.session_state:
-    st.session_state.idx = 0
-if "resposta_text" not in st.session_state:
-    st.session_state.resposta_text = ""
-
-df = st.session_state.df
-st.session_state.idx = min(st.session_state.idx, len(df) - 1)
-idx = st.session_state.idx
-row = df.iloc[idx]
-
-# Prefill "Resposta" from the DataFrame, once per new idx
-if (
-    "last_prefill_idx" not in st.session_state
-    or st.session_state.last_prefill_idx != idx
-):
-    st.session_state.resposta_text = row["resposta"]
-    st.session_state.last_prefill_idx = idx
-
-# Normalize odd column name
-if "OBITO PROVAVEL" in df.columns and "OBITO_PROVAVEL" not in df.columns:
-    df = df.rename(columns={"OBITO PROVAVEL": "OBITO_PROVAVEL"})
-
-# ─── HEADER & PROGRESS ──────────────────────────────────────────────────────
-st.title("📱 WhatsApp Agent Interface")
-_, progress_col, _ = st.columns([1, 2, 1])
-with progress_col:
-    st.progress((idx + 1) / len(df))
-    st.caption(f"{idx + 1}/{len(df)} mensagens processadas")
-st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
-
-
-# ─── NAVIGATION TOP ─────────────────────────────────────────────────────────
-def goto_prev():
-    """Go to the previous conversation."""
-    st.session_state.idx = max(st.session_state.idx - 1, 0)
-
-
-def goto_next():
-    """Go to the next conversation."""
-    st.session_state.idx = min(st.session_state.idx + 1, len(df) - 1)
-
-
-nav_prev_col, _, nav_next_col = st.columns([1, 2, 1])
-with nav_prev_col:
-    st.button(
-        "⬅️ Anterior",
-        key="top_prev",
-        disabled=idx == 0,
-        on_click=goto_prev,
-        use_container_width=True,
-    )
-with nav_next_col:
-    st.button(
-        "Próximo ➡️",
-        key="top_next",
-        disabled=idx >= len(df) - 1,
-        on_click=goto_next,
-        use_container_width=True,
-    )
-
-# ─── CONTACT SECTION ────────────────────────────────────────────────────────
-hl_words = build_highlights(row["display_name"], row["expected_name"])
-col1, col2, col3, col4, col5 = st.columns([1, 2, 2, 4, 2])
-
-with col1:
-    picture = row.get("PictureUrl")
-    if picture:
-        st.image(picture, width=80)
-    else:
-        st.markdown("👤")
-
-with col2:
-    st.markdown("**Nome no WhatsApp**")
-    if HIGHLIGHT_ENABLE:
-        st.markdown(highlight(row["display_name"], hl_words), unsafe_allow_html=True)
-    else:
-        st.markdown(row["display_name"])
-
-with col3:
-    st.markdown("**Nome Esperado**")
-    st.markdown(highlight(row["expected_name"], hl_words), unsafe_allow_html=True)
-
-with col4:
-    st.markdown("**Familiares**")
-    for card in parse_familiares_grouped(row["familiares"]):
-        st.markdown(f"- {card}")
-
-with col5:
-    age = row.get("IDADE")
-    if pd.notna(age):
-        st.markdown(f"**{int(age)} anos**")
-    alive_status = (
-        "✝︎ Provável Óbito" if row.get("OBITO_PROVAVEL", False) else "🌟 Provável vivo"
-    )
-    st.markdown(alive_status)
-
-# ─── IMÓVEIS ────────────────────────────────────────────────────────────────
-imoveis = parse_imoveis(row.get("IMOVEIS"))
-if isinstance(imoveis, dict):
-    imoveis = [imoveis]
-elif not isinstance(imoveis, list):
-    imoveis = []
-
-if imoveis:
-    st.subheader("🏢 Imóveis")
-    for item in imoveis:
-        if not isinstance(item, dict):
-            continue
-        area = fmt_num(item.get("AREA TERRENO", "?"))
-        fraction = item.get("FRACAO IDEAL", "")
-        try:
-            fraction_percent = f"{int(round(float(fraction) * 100 if float(fraction) <= 1 else float(fraction)))}%"
-        except (ValueError, TypeError):
-            fraction_percent = str(fraction)
-        build_type = item.get("TIPO CONSTRUTIVO", "").strip()
-        address = item.get("ENDERECO", "?")
-        neighborhood = item.get("BAIRRO", "?")
-        st.markdown(
-            f"{address}, {neighborhood} – "
-            f"**Terreno: {area} m²**{(' [' + build_type + ']') if build_type else ''}"
-            f" (Fração ideal: {fraction_percent})",
-            unsafe_allow_html=True,
+# 2) Extract addresses from IMOVEIS
+def extract_addresses(imoveis_raw):
+    try:
+        parsed = parse_imoveis(imoveis_raw)
+        items = parsed if isinstance(parsed, list) else [parsed]
+        return ", ".join(
+            itm.get('ENDERECO', '?') for itm in items if isinstance(itm, dict)
         )
+    except Exception:
+        return ''
 
-st.markdown("---")
+# Apply transformations
+df['phone'] = df.get('whatsapp_number', '').apply(format_brazilian_phone)
+df['ENDERECO'] = df.get('IMOVEIS', '').apply(extract_addresses)
 
-# ─── CHAT HISTORY ───────────────────────────────────────────────────────────
-chat_html = "<div class='chat-container'>"
-for msg in parse_chat(row["conversation_history"]):
-    msg_class = (
-        "agent-message" if msg["sender"] in ("Urb.Link", "Athos") else "contact-message"
-    )
-    chat_html += f"<div class='{msg_class}'>{bold_asterisks(msg['msg'])}"
-    chat_html += f"<div class='timestamp'>{msg['ts']}</div></div>"
-chat_html += "</div>"
-st.markdown(chat_html, unsafe_allow_html=True)
+# ─── SELECT & VALIDATE COLUMNS ─────────────────────────────────────────────
+display_cols = [
+    'phone', 'display_name', 'expected_name',
+    'classificacao', 'intencao',
+    'pagamento', 'percepcao_valor_esperado',
+    'inventario_flag', 'resposta', 'sheet_synced'
+]
+# Keep only columns that exist
+display_cols = [c for c in display_cols if c in df.columns]
 
-st.markdown("---")
+# ─── BUILD GRID DATAFRAME ─────────────────────────────────────────────────
+# Add index
+if '_idx' not in df.columns:
+    df['_idx'] = df.index
 
-# ─── RAZÃO ─────────────────────────────────────────────────────────────────
-st.subheader("📋 Racional usado pela AI classificadora")
-st.markdown(f"<div class='reason-box'>{row['Razao']}</div>", unsafe_allow_html=True)
+grid_cols = ['_idx', *display_cols]
+if 'ENDERECO' not in grid_cols:
+    grid_cols.append('ENDERECO')
 
-st.markdown("---")
+grid_df = df[grid_cols].copy()
 
-# ─── CLASSIFICAÇÃO & RESPOSTA ───────────────────────────────────────────────
-st.subheader("📝 Classificação e Resposta")
+# ─── SHOW MODIFICATIONS STATUS ─────────────────────────────────────────────
+if 'original_values' in st.session_state and st.session_state['original_values']:
+    modified_records = []
+    for idx, original in st.session_state['original_values'].items():
+        current = st.session_state.master_df.iloc[idx]
+        has_changes = False
+        for field, orig_value in original.items():
+            if field in current and current[field] != orig_value:
+                has_changes = True
+                break
+        if has_changes:
+            modified_records.append(idx)
+    
+    if modified_records:
+        st.info(f"📝 Records with modifications: {len(modified_records)} ({', '.join(map(str, [r+1 for r in modified_records]))})")
 
-# Presets dropdown (outside the form)
-st.selectbox(
-    "Respostas Prontas",
-    options=list(PRESET_RESPONSES.keys()),
-    format_func=lambda tag: tag or "-- selecione uma resposta pronta --",
-    key="preset_key",
-    on_change=apply_preset,
+# ─── RENDER GRID ──────────────────────────────────────────────────────────
+# Display the data editor
+st.data_editor(
+    grid_df,
+    disabled=True,
+    hide_index=True,
+    use_container_width=True,
 )
 
-with st.form("main_form"):
-    left_col, right_col = st.columns(2)
+# ─── BULK ACTIONS ─────────────────────────────────────────────────────────
+st.subheader("Bulk Actions")
+bulk_col1, bulk_col2, bulk_col3 = st.columns(3)
 
-    with left_col:
-        classificacao_sel = st.selectbox(
-            "🏷️ Classificação",
-            CLASSIFICACAO_OPTS,
-            index=(
-                CLASSIFICACAO_OPTS.index(row["classificacao"])
-                if row["classificacao"] in CLASSIFICACAO_OPTS
-                else 0
-            ),
-        )
-        intencao_sel = st.selectbox(
-            "🔍 Intenção",
-            INTENCAO_OPTS,
-            index=(
-                INTENCAO_OPTS.index(row["intencao"])
-                if row["intencao"] in INTENCAO_OPTS
-                else 0
-            ),
-        )
+with bulk_col1:
+    if st.button("💾 Save to Database"):
+        # This would save the current state to the database
+        st.info("Save to database functionality would be implemented here")
 
-        # ensure we only default to a list if row["acoes_urblink"] is actually a list
-        acoes_default = (
-            row.get("acoes_urblink")
-            if isinstance(row.get("acoes_urblink"), list)
-            else []
-        )
-        acoes_sel = st.multiselect(
-            "📞 Ações Urb.Link",
-            ACOES_OPTS,
-            default=acoes_default,
-            key="acoes_urblink",
-        )
+with bulk_col2:
+    if st.button("🔄 Reload Original Data"):
+        if st.button("⚠️ Confirm Reload", key="confirm_reload"):
+            # Clear all session state and reload
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
+            st.success("✅ Reloaded original data - all modifications lost!")
+            st.rerun()
 
-        status_opts = [""] + STATUS_URBLINK_OPTS
-        current_status = row.get("status_urblink", "")
-        # if DF has a real status use its index+1, otherwise stay at 0 (the blank)
-        status_index = (
-            status_opts.index(current_status) if current_status in status_opts else 0
-        )
+with bulk_col3:
+    export_format = st.selectbox("Export format", ["CSV", "Excel"], key="export_format")
+    if st.button("📊 Export Current State"):
+        if export_format == "CSV":
+            csv = st.session_state.master_df.to_csv(index=False)
+            st.download_button(
+                label="Download CSV",
+                data=csv,
+                file_name=f"whatsapp_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv"
+            )
+        else:
+            # Excel export would be implemented here
+            st.info("Excel export would be implemented here")
 
-        status = st.selectbox(
-            "🚦 Status Urb.Link",
-            status_opts,
-            index=status_index,
-            key="status_urblink",
-        )
+# Add action buttons below the grid
+st.subheader("Record Actions")
+st.write("Click to open processor for a record:")
 
-        pag_default = row.get("pagamento") or ""
-        pag_default = [p.strip() for p in pag_default.split(",") if p.strip()]
-        pagamento_sel = st.multiselect(
-            "💳 Forma de Pagamento",
-            PAGAMENTO_OPTS,
-            default=pag_default,
-            key="pagamento",
-        )
+# Create a grid of buttons
+num_records = len(grid_df)
+cols_per_row = 5
+num_rows = (num_records + cols_per_row - 1) // cols_per_row
 
-        percepcao_opts = [""] + PERCEPCAO_OPTS
-        current_perc = row.get("percepcao_valor_esperado", "")
-        percepcao_index = (
-            percepcao_opts.index(current_perc) if current_perc in percepcao_opts else 0
-        )
-
-        percepcao_sel = st.selectbox(
-            "💎 Percepção de Valor",
-            percepcao_opts,
-            index=percepcao_index,
-            key="percepcao_valor_esperado",
-        )
-
-        razao_default = (
-            row.get("razao_standby")
-            if isinstance(row.get("razao_standby"), list)
-            else []
-        )
-
-        razao_sel = st.multiselect(
-            "🤔 Razão Stand-by",
-            STANDBY_REASONS,
-            default=razao_default,
-            key="razao_standby",
-        )
-
-    with right_col:
-        st.text_area(
-            "✏️ Resposta",
-            value=st.session_state.resposta_text,
-            key="resposta_text",
-            height=180,
-        )
-
-        st.text_area(
-            "📋 OBS",
-            value="",
-            height=120,
-            key="obs",
-        )
-
-        st.checkbox(
-            "Stakeholder", value=row.get("stakeholder", False), key="stakeholder"
-        )
-        st.checkbox(
-            "Intermediador", value=row.get("intermediador", False), key="intermediador"
-        )
-        st.checkbox(
-            "Inventário", value=row.get("inventario_flag", False), key="inventario_flag"
-        )
-        st.checkbox("Stand-by", value=row.get("standby", False), key="standby")
-
-        salvar = st.form_submit_button("💾 Salvar Alterações")
-        if salvar:
-            dbg("Saved changes")
-            st.success("Alterações salvas (mock)")
-
-# ─── NAVIGATION BOTTOM ──────────────────────────────────────────────────────
-st.markdown("---")
-bot_prev_col, _, bot_next_col = st.columns([1, 2, 1])
-with bot_prev_col:
-    st.button(
-        "⬅️ Anterior",
-        key="bottom_prev",
-        disabled=idx == 0,
-        on_click=goto_prev,
-        use_container_width=True,
-    )
-with bot_next_col:
-    st.button(
-        "Próximo ➡️",
-        key="bottom_next",
-        disabled=idx >= len(df) - 1,
-        on_click=goto_next,
-        use_container_width=True,
-    )
-
-# ─── FOOTER CAPTION ─────────────────────────────────────────────────────────
-st.caption(
-    f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}"
-)
+for row_idx in range(num_rows):
+    cols = st.columns(cols_per_row)
+    for col_idx in range(cols_per_row):
+        record_num = row_idx * cols_per_row + col_idx
+        if record_num < num_records:
+            row = grid_df.iloc[record_num]
+            record_idx = row['_idx'] if '_idx' in row else record_num
+            display_name = row.get('display_name', f'Record {record_idx}')
+            
+            # Show if record has modifications
+            has_modifications = False
+            if 'original_values' in st.session_state and record_idx in st.session_state['original_values']:
+                original = st.session_state['original_values'][record_idx]
+                current = st.session_state.master_df.iloc[record_idx].to_dict()
+                for field in original:
+                    if field in current and original[field] != current[field]:
+                        has_modifications = True
+                        break
+            
+            button_text = f"{'📝 ' if has_modifications else ''}{display_name[:20]}{'...' if len(display_name) > 20 else ''}"
+            
+            with cols[col_idx]:
+                if st.button(button_text, key=f"open_{record_idx}", use_container_width=True):
+                    # Store the selected index in session state
+                    st.session_state.selected_idx = record_idx
+                    # Navigate to the processor page
+                    st.switch_page("pages/Processor.py")
