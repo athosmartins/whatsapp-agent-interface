@@ -1,18 +1,13 @@
-# pages/Processor.py
+"""Processor.py - Streamlit interface for WhatsApp Agent with authentication."""
 
-# pylint: disable=invalid-name,broad-exception-caught,C0301,C0114,C0116,E0602,E1101
-
-"""
-Processor.py
-Streamlit interface for the WhatsApp Agent with persistent cookie authentication
-"""
-
-from datetime import datetime, timedelta
-import streamlit as st
-import pandas as pd
-import time, os
 import copy
+import os
+from datetime import datetime
 
+import pandas as pd
+import streamlit as st
+
+from auth.login_manager import simple_auth
 from config import (
     ACOES_OPTS,
     CLASSIFICACAO_OPTS,
@@ -24,10 +19,9 @@ from config import (
     STATUS_URBLINK_OPTS,
 )
 from loaders.db_loader import get_dataframe
-from auth.login_manager import simple_auth
+from services.spreadsheet import sync_record_to_sheet
 from utils.styles import STYLES
 from utils.ui_helpers import (
-    apply_preset,
     bold_asterisks,
     build_highlights,
     fmt_num,
@@ -36,7 +30,6 @@ from utils.ui_helpers import (
     parse_familiares_grouped,
     parse_imoveis,
 )
-from services.spreadsheet import sync_record_to_sheet
 
 # ─── PAGE CONFIG (MUST BE FIRST) ────────────────────────────────────────
 st.set_page_config(page_title="Processador de Conversas", page_icon="📱", layout="wide")
@@ -51,7 +44,8 @@ HIGHLIGHT_ENABLE = False
 
 # Try to get from environment variable first
 if "LOGIN_ENABLED" in os.environ:
-    LOGIN_ENABLED = os.environ["LOGIN_ENABLED"].lower() in ("true", "1", "yes", "on")
+    env_value = os.environ["LOGIN_ENABLED"].lower()
+    LOGIN_ENABLED = env_value in ("true", "1", "yes", "on")
 # Try to get from Streamlit secrets if available
 elif hasattr(st, 'secrets') and "LOGIN_ENABLED" in st.secrets:
     LOGIN_ENABLED = st.secrets["LOGIN_ENABLED"]
@@ -323,7 +317,7 @@ with nav_prev_col:
     st.button(
         "⬅️ Anterior",
         key="top_prev",
-        disabled=idx == 0,
+        disabled=bool(idx == 0),
         on_click=goto_prev,
         use_container_width=True,
     )
@@ -331,7 +325,7 @@ with nav_next_col:
     st.button(
         "Próximo ➡️",
         key="top_next",
-        disabled=idx >= len(df) - 1,
+        disabled=bool(idx >= len(df) - 1),
         on_click=goto_next,
         use_container_width=True,
     )
@@ -688,7 +682,7 @@ with bot_prev_col:
     st.button(
         "⬅️ Anterior",
         key="bottom_prev",
-        disabled=idx == 0,
+        disabled=bool(idx == 0),
         on_click=goto_prev,
         use_container_width=True,
     )
@@ -769,7 +763,7 @@ with bot_next_col:
     st.button(
         "Próximo ➡️",
         key="bottom_next",
-        disabled=idx >= len(df) - 1,
+        disabled=bool(idx >= len(df) - 1),
         on_click=goto_next,
         use_container_width=True,
     )

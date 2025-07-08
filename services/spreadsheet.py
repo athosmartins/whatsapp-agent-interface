@@ -1,8 +1,9 @@
-import json
+"""Google Sheets integration service for WhatsApp conversation data."""
+
+from typing import Any, Dict, List
+
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from typing import List, Dict, Any
-import pandas as pd
 
 # Google Sheets configuration
 SPREADSHEET_ID = "1vJItZ03PiZ4Y3HSwBnK_AUCOiQK32OkynMCd-1exU9k"
