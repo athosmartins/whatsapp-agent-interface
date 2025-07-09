@@ -18,7 +18,7 @@ from config import (
     STANDBY_REASONS,
     STATUS_URBLINK_OPTS,
 )
-from loaders.db_loader import get_dataframe
+from loaders.db_loader import get_dataframe, get_db_info
 from services.spreadsheet import sync_record_to_sheet
 from utils.styles import STYLES
 from utils.ui_helpers import (
@@ -72,7 +72,6 @@ DEV = True  # Set based on your environment
 
 
 # ─── DATA LOADER ────────────────────────────────────────────────────────────
-@st.cache_data
 def load_data():
     """Load the WhatsApp conversations DataFrame."""
     return get_dataframe()
@@ -87,6 +86,26 @@ if DEV:
     DEBUG = st.sidebar.checkbox("🐛 Debug Mode", value=False)
     if DEBUG:
         debug_panel = st.sidebar.expander("🔍 Debug Log", expanded=False)
+        
+        # Add database info to debug panel
+        db_info_panel = st.sidebar.expander("📊 Database Info", expanded=True)
+        if db_info_panel:
+            db_info = get_db_info()
+            db_info_panel.write("**Database File Information:**")
+            db_info_panel.write(f"📁 **Original filename:** {db_info['original_filename']}")
+            db_info_panel.write(f"🕒 **Original modified:** {db_info['original_modified']}")
+            db_info_panel.write(f"💾 **Local path:** {db_info['local_path']}")
+            db_info_panel.write(f"📅 **Local modified:** {db_info['local_modified']}")
+            db_info_panel.write(f"⏰ **File age:** {db_info['file_age']}")
+            db_info_panel.write(f"📏 **File size:** {db_info['local_size']:,} bytes")
+            
+            # Show freshness status
+            if db_info.get('is_stale', False):
+                db_info_panel.warning("⚠️ Database file is older than 1 hour. Will auto-refresh on next load.")
+            else:
+                db_info_panel.success("✅ Database file is fresh (< 1 hour old)")
+            
+            db_info_panel.info("🔄 Database automatically refreshes when older than 1 hour")
 
 
 def dbg(message: str):
@@ -332,39 +351,46 @@ with nav_next_col:
 
 # ─── CONTACT SECTION ────────────────────────────────────────────────────────
 hl_words = build_highlights(row["display_name"], row["expected_name"])
-col1, col2, col3, col4, col5 = st.columns([1, 2, 2, 4, 2])
 
-with col1:
-    picture = row.get("PictureUrl")
-    if picture:
-        st.image(picture, width=80)
-    else:
-        st.markdown("👤")
+# Create contact info HTML with fixed height
+picture = row.get("PictureUrl")
+display_name = highlight(row["display_name"], hl_words) if HIGHLIGHT_ENABLE else row["display_name"]
+expected_name = highlight(row["expected_name"], hl_words)
+familiares_list = parse_familiares_grouped(row["familiares"])
+age = row.get("IDADE")
+age_text = f"**{int(age)} anos**" if pd.notna(age) else ""
+alive_status = "✝︎ Provável Óbito" if row.get("OBITO_PROVAVEL", False) else "🌟 Provável vivo"
 
-with col2:
-    st.markdown("**Nome no WhatsApp**")
-    if HIGHLIGHT_ENABLE:
-        st.markdown(highlight(row["display_name"], hl_words), unsafe_allow_html=True)
-    else:
-        st.markdown(row["display_name"])
+# Build familiares HTML
+familiares_html = ""
+for card in familiares_list:
+    familiares_html += f"<li>{card}</li>"
 
-with col3:
-    st.markdown("**Nome Esperado**")
-    st.markdown(highlight(row["expected_name"], hl_words), unsafe_allow_html=True)
+contact_html = f"""
+<div style="height: 150px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9; display: flex; align-items: flex-start;">
+    <div style="flex: 1; margin-right: 10px;">
+        {'<img src="' + picture + '" style="width: 80px; height: auto;" />' if picture else '👤'}
+    </div>
+    <div style="flex: 2; margin-right: 10px;">
+        <strong>Nome no WhatsApp</strong><br>
+        {display_name}
+    </div>
+    <div style="flex: 2; margin-right: 10px;">
+        <strong>Nome Esperado</strong><br>
+        {expected_name}
+    </div>
+    <div style="flex: 4; margin-right: 10px;">
+        <strong>Familiares</strong><br>
+        <ul style="margin: 0; padding-left: 20px;">{familiares_html}</ul>
+    </div>
+    <div style="flex: 2;">
+        {age_text}<br>
+        {alive_status}
+    </div>
+</div>
+"""
 
-with col4:
-    st.markdown("**Familiares**")
-    for card in parse_familiares_grouped(row["familiares"]):
-        st.markdown(f"- {card}")
-
-with col5:
-    age = row.get("IDADE")
-    if pd.notna(age):
-        st.markdown(f"**{int(age)} anos**")
-    alive_status = (
-        "✝︎ Provável Óbito" if row.get("OBITO_PROVAVEL", False) else "🌟 Provável vivo"
-    )
-    st.markdown(alive_status)
+st.markdown(contact_html, unsafe_allow_html=True)
 
 # ─── IMÓVEIS ────────────────────────────────────────────────────────────────
 imoveis = parse_imoveis(row.get("IMOVEIS"))
@@ -373,8 +399,9 @@ if isinstance(imoveis, dict):
 elif not isinstance(imoveis, list):
     imoveis = []
 
+# Build imoveis HTML
+imoveis_html = ""
 if imoveis:
-    st.subheader("🏢 Imóveis")
     for item in imoveis:
         if not isinstance(item, dict):
             continue
@@ -387,12 +414,18 @@ if imoveis:
         build_type = item.get("TIPO CONSTRUTIVO", "").strip()
         address = item.get("ENDERECO", "?")
         neighborhood = item.get("BAIRRO", "?")
-        st.markdown(
-            f"{address}, {neighborhood} – "
-            f"**Terreno: {area} m²**{(' [' + build_type + ']') if build_type else ''}"
-            f" (Fração ideal: {fraction_percent})",
-            unsafe_allow_html=True,
-        )
+        imoveis_html += f'<div style="margin-bottom: 10px; padding: 5px; border-left: 3px solid #007bff;">{address}, {neighborhood} – <strong>Terreno: {area} m²</strong>{(" [" + build_type + "]") if build_type else ""} (Fração ideal: {fraction_percent})</div>'
+
+imoveis_section = f"""
+<div style="margin: 10px 0;">
+    <h3>🏢 Imóveis</h3>
+    <div style="height: 120px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9;">
+        {imoveis_html if imoveis_html else '<div style="color: #888; font-style: italic;">Nenhum imóvel encontrado</div>'}
+    </div>
+</div>
+"""
+
+st.markdown(imoveis_section, unsafe_allow_html=True)
 
 st.markdown("---")
 
