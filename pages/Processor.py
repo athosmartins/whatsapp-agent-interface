@@ -349,115 +349,128 @@ with nav_next_col:
         use_container_width=True,
     )
 
-# ─── CONTACT SECTION ────────────────────────────────────────────────────────
-hl_words = build_highlights(row["display_name"], row["expected_name"])
+# ─── MAIN CONTENT LAYOUT ────────────────────────────────────────────────────
+left_col, right_col = st.columns([1, 1])
 
-# Create contact info HTML with fixed height
-picture = row.get("PictureUrl")
-display_name = highlight(row["display_name"], hl_words) if HIGHLIGHT_ENABLE else row["display_name"]
-expected_name = highlight(row["expected_name"], hl_words)
-familiares_list = parse_familiares_grouped(row["familiares"])
-age = row.get("IDADE")
-age_text = f"**{int(age)} anos**" if pd.notna(age) else ""
-alive_status = "✝︎ Provável Óbito" if row.get("OBITO_PROVAVEL", False) else "🌟 Provável vivo"
+with left_col:
+    # ─── CONTACT SECTION ────────────────────────────────────────────────────────
+    hl_words = build_highlights(row["display_name"], row["expected_name"])
 
-# Build familiares HTML
-familiares_html = ""
-for card in familiares_list:
-    familiares_html += f"<li>{card}</li>"
+    # Create contact info HTML with fixed height
+    picture = row.get("PictureUrl")
+    display_name = highlight(row["display_name"], hl_words) if HIGHLIGHT_ENABLE else row["display_name"]
+    expected_name = highlight(row["expected_name"], hl_words)
+    familiares_list = parse_familiares_grouped(row["familiares"])
+    age = row.get("IDADE")
+    age_text = f"**{int(age)} anos**" if pd.notna(age) else ""
+    alive_status = "✝︎ Provável Óbito" if row.get("OBITO_PROVAVEL", False) else "🌟 Provável vivo"
 
-contact_html = f"""
-<div style="height: 150px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9; display: flex; align-items: flex-start;">
-    <div style="flex: 1; margin-right: 10px;">
-        {'<img src="' + picture + '" style="width: 80px; height: auto;" />' if picture else '👤'}
+    # Build familiares HTML
+    familiares_html = ""
+    for card in familiares_list:
+        familiares_html += f"<li>{card}</li>"
+
+    contact_html = f"""
+    <div style="height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9; margin-bottom: 10px;">
+        <h3>👤 Informações Pessoais</h3>
+        <div style="display: flex; align-items: flex-start; margin-bottom: 10px;">
+            <div style="margin-right: 15px;">
+                {'<img src="' + picture + '" style="width: 80px; height: auto;" />' if picture else '👤'}
+            </div>
+            <div style="flex: 1;">
+                <div style="margin-bottom: 10px;">
+                    <strong>Nome no WhatsApp:</strong> {display_name}<br>
+                    <strong>Nome Esperado:</strong> {expected_name}
+                </div>
+                <div style="margin-bottom: 10px;">
+                    {age_text}<br>
+                    {alive_status}
+                </div>
+                <div>
+                    <strong>Familiares:</strong><br>
+                    <ul style="margin: 5px 0; padding-left: 20px;">{familiares_html}</ul>
+                </div>
+            </div>
+        </div>
     </div>
-    <div style="flex: 2; margin-right: 10px;">
-        <strong>Nome no WhatsApp</strong><br>
-        {display_name}
-    </div>
-    <div style="flex: 2; margin-right: 10px;">
-        <strong>Nome Esperado</strong><br>
-        {expected_name}
-    </div>
-    <div style="flex: 4; margin-right: 10px;">
-        <strong>Familiares</strong><br>
-        <ul style="margin: 0; padding-left: 20px;">{familiares_html}</ul>
-    </div>
-    <div style="flex: 2;">
-        {age_text}<br>
-        {alive_status}
-    </div>
-</div>
-"""
+    """
 
-st.markdown(contact_html, unsafe_allow_html=True)
+    st.markdown(contact_html, unsafe_allow_html=True)
 
-# ─── IMÓVEIS ────────────────────────────────────────────────────────────────
-imoveis = parse_imoveis(row.get("IMOVEIS"))
-if isinstance(imoveis, dict):
-    imoveis = [imoveis]
-elif not isinstance(imoveis, list):
-    imoveis = []
+    # ─── IMÓVEIS ────────────────────────────────────────────────────────────────
+    imoveis = parse_imoveis(row.get("IMOVEIS"))
+    if isinstance(imoveis, dict):
+        imoveis = [imoveis]
+    elif not isinstance(imoveis, list):
+        imoveis = []
 
-# Build imoveis HTML
-imoveis_html = ""
-if imoveis:
-    for item in imoveis:
-        if not isinstance(item, dict):
-            continue
-        area = fmt_num(item.get("AREA TERRENO", "?"))
-        fraction = item.get("FRACAO IDEAL", "")
-        try:
-            fraction_percent = f"{int(round(float(fraction) * 100 if float(fraction) <= 1 else float(fraction)))}%"
-        except (ValueError, TypeError):
-            fraction_percent = str(fraction)
-        build_type = item.get("TIPO CONSTRUTIVO", "").strip()
-        address = item.get("ENDERECO", "?")
-        neighborhood = item.get("BAIRRO", "?")
-        imoveis_html += f'<div style="margin-bottom: 10px; padding: 5px; border-left: 3px solid #007bff;">{address}, {neighborhood} – <strong>Terreno: {area} m²</strong>{(" [" + build_type + "]") if build_type else ""} (Fração ideal: {fraction_percent})</div>'
+    # Build imoveis HTML
+    imoveis_html = ""
+    if imoveis:
+        for item in imoveis:
+            if not isinstance(item, dict):
+                continue
+            area = fmt_num(item.get("AREA TERRENO", "?"))
+            fraction = item.get("FRACAO IDEAL", "")
+            try:
+                fraction_percent = f"{int(round(float(fraction) * 100 if float(fraction) <= 1 else float(fraction)))}%"
+            except (ValueError, TypeError):
+                fraction_percent = str(fraction)
+            build_type = item.get("TIPO CONSTRUTIVO", "").strip()
+            address = item.get("ENDERECO", "?")
+            neighborhood = item.get("BAIRRO", "?")
+            imoveis_html += f'<div style="margin-bottom: 10px; padding: 5px; border-left: 3px solid #007bff;">{address}, {neighborhood} – <strong>Terreno: {area} m²</strong>{(" [" + build_type + "]") if build_type else ""} (Fração ideal: {fraction_percent})</div>'
 
-imoveis_section = f"""
-<div style="margin: 10px 0;">
-    <h3>🏢 Imóveis</h3>
-    <div style="height: 120px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9;">
+    imoveis_section = f"""
+    <div style="height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9;">
+        <h3>🏢 Imóveis</h3>
         {imoveis_html if imoveis_html else '<div style="color: #888; font-style: italic;">Nenhum imóvel encontrado</div>'}
     </div>
-</div>
-"""
+    """
 
-st.markdown(imoveis_section, unsafe_allow_html=True)
+    st.markdown(imoveis_section, unsafe_allow_html=True)
 
-st.markdown("---")
-
-# ─── CHAT HISTORY ───────────────────────────────────────────────────────────
-chat_html = "<div class='chat-container'>"
-for msg in parse_chat(row["conversation_history"]):
-    msg_class = (
-        "agent-message" if msg["sender"] in ("Urb.Link", "Athos") else "contact-message"
-    )
-    chat_html += f"<div class='{msg_class}'>{bold_asterisks(msg['msg'])}"
-    chat_html += f"<div class='timestamp'>{msg['ts']}</div></div>"
-chat_html += "</div>"
-st.markdown(chat_html, unsafe_allow_html=True)
-
-st.markdown("---")
-
-# ─── RAZÃO ─────────────────────────────────────────────────────────────────
-st.subheader("📋 Racional usado pela AI classificadora")
-st.markdown(f"<div class='reason-box'>{row['Razao']}</div>", unsafe_allow_html=True)
+with right_col:
+    # ─── CHAT HISTORY ───────────────────────────────────────────────────────────
+    chat_html = "<div style='height: 840px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9;'>"
+    chat_html += "<h3>💬 Histórico da Conversa</h3>"
+    chat_html += "<div class='chat-container' style='height: calc(100% - 50px); max-height: none; overflow-y: auto; margin: 0;'>"
+    for msg in parse_chat(row["conversation_history"]):
+        msg_class = (
+            "agent-message" if msg["sender"] in ("Urb.Link", "Athos") else "contact-message"
+        )
+        chat_html += f"<div class='{msg_class}'>{bold_asterisks(msg['msg'])}"
+        chat_html += f"<div class='timestamp'>{msg['ts']}</div></div>"
+    chat_html += "</div></div>"
+    st.markdown(chat_html, unsafe_allow_html=True)
 
 st.markdown("---")
 
 # ─── CLASSIFICAÇÃO & RESPOSTA ───────────────────────────────────────────────
 st.subheader("📝 Classificação e Resposta")
 
-# Presets dropdown (outside the form)
-preset_selected = st.selectbox(
-    "Respostas Prontas",
-    options=list(PRESET_RESPONSES.keys()),
-    format_func=lambda tag: tag or "-- selecione uma resposta pronta --",
-    key=f"preset_key_{idx}",  # Unique key per record
-)
+# Create two columns for presets and racional
+preset_col, racional_col = st.columns([1, 1])
+
+with preset_col:
+    # Presets dropdown (smaller section)
+    preset_selected = st.selectbox(
+        "Respostas Prontas",
+        options=list(PRESET_RESPONSES.keys()),
+        format_func=lambda tag: tag or "-- selecione uma resposta pronta --",
+        key=f"preset_key_{idx}",  # Unique key per record
+    )
+
+with racional_col:
+    # Racional in a compact yellow box
+    st.markdown(f"""
+    <div style="margin-top: 25px;">
+        <strong>📋 Racional usado pela AI classificadora:</strong><br>
+        <div class='reason-box' style="margin-top: 5px; font-size: 0.85rem; max-height: 100px; overflow-y: auto;">
+            {row['Razao']}
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 # Apply preset if selected
 if preset_selected and preset_selected in PRESET_RESPONSES:
