@@ -12,6 +12,9 @@ from utils.ui_helpers import parse_imoveis
 st.set_page_config(page_title="Home Dashboard", layout="wide")
 st.title("🏠 Home Dashboard")
 
+# Debug mode check
+DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
+
 
 # ─── LOAD & CACHE DATA ────────────────────────────────────────────────────
 @st.cache_data
@@ -33,6 +36,14 @@ if "master_df" not in st.session_state:
 
 # Work on the master_df
 df = st.session_state.master_df.copy()
+
+# Debug info
+if DEBUG:
+    st.sidebar.subheader("Debug Info")
+    st.sidebar.write(f"Total records: {len(df)}")
+    st.sidebar.write(f"Available columns: {list(df.columns)}")
+    if "original_values" in st.session_state:
+        st.sidebar.write(f"Modified records: {len(st.session_state.get('original_values', {}))}")
 
 
 # ─── TRANSFORM COLUMNS ─────────────────────────────────────────────────────

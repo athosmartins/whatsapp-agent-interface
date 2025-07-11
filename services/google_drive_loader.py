@@ -239,7 +239,6 @@ if st.session_state.current_index >= total_records:
 current_row = df.iloc[st.session_state.current_index]
 
 # Title and Progress
-st.title("📱 WhatsApp Agent Interface")
 
 # Progress bar
 progress_value = (st.session_state.current_index + 1) / total_records
@@ -320,7 +319,7 @@ with col5:
 st.markdown("---")
 
 # Conversation History
-st.subheader("💬 Histórico da Conversa")
+# st.subheader("💬 Histórico da Conversa")
 
 messages = parse_conversation(current_row.get('conversation_history', ''))
 

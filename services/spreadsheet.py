@@ -22,26 +22,27 @@ def get_sheets_service():
         print(f"Error initializing Google Sheets service: {e}")
         return None
 
-def get_sheet_data(sheet_name: str = "Sheet1", range_name: str = None) -> List[List]:
-    """Read data from Google Sheet."""
+def get_sheet_data(sheet_name: str = "report", range_name: str = None) -> List[List]:
+    """Read data from Google Sheet using batch get method."""
     service = get_sheets_service()
     if not service:
         return []
     
     try:
-        if range_name:
-            range_to_read = f"{sheet_name}!{range_name}"
-        else:
-            range_to_read = sheet_name
-            
-        result = service.spreadsheets().values().get(
+        # Use batchGet method which handles special characters better
+        result = service.spreadsheets().values().batchGet(
             spreadsheetId=SPREADSHEET_ID,
-            range=range_to_read
+            ranges=[sheet_name]
         ).execute()
         
-        return result.get('values', [])
+        value_ranges = result.get('valueRanges', [])
+        if value_ranges:
+            return value_ranges[0].get('values', [])
+        else:
+            return []
+            
     except Exception as e:
-        print(f"Error reading sheet data: {e}")
+        print(f"Error reading sheet data from {sheet_name}: {e}")
         return []
 
 def update_sheet_row(row_number: int, values: List[Any], sheet_name: str = "Sheet1") -> bool:
@@ -60,7 +61,7 @@ def update_sheet_row(row_number: int, values: List[Any], sheet_name: str = "Shee
         result = service.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
             range=range_name,
-            valueInputOption='RAW',
+            valueInputOption='USER_ENTERED',
             body=body
         ).execute()
         
@@ -85,7 +86,7 @@ def update_sheet_cell(row: int, col: str, value: Any, sheet_name: str = "Sheet1"
         result = service.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
             range=range_name,
-            valueInputOption='RAW',
+            valueInputOption='USER_ENTERED',
             body=body
         ).execute()
         
@@ -154,12 +155,79 @@ def sync_record_to_sheet(record_data: Dict[str, Any], whatsapp_number: str, shee
             print("WhatsApp column not found in sheet")
             return False
         
-        # Find matching row
-        for i, row in enumerate(sheet_data[1:], start=2):  # Start from row 2 (after header)
-            if i <= len(row) and whatsapp_col_index < len(row):
-                if row[whatsapp_col_index] == whatsapp_number:
-                    target_row = i
-                    break
+        # Clean phone numbers for matching - Enhanced algorithm
+        def clean_phone_for_match(phone):
+            if not phone:
+                return ""
+            
+            # Clean whitespace and special characters
+            import re
+            clean = re.sub(r'[\s\t\n\r]', '', str(phone))
+            clean = re.sub(r'[^0-9]', '', clean)
+            
+            # Handle edge cases where phone might be too short
+            if len(clean) < 8:
+                return ""
+            
+            # Remove country code if present (55 for Brazil)
+            if clean.startswith('55') and len(clean) > 10:
+                clean = clean[2:]
+            
+            # Brazilian area codes
+            valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
+            
+            # If 10 digits and starts with valid area code, add mobile prefix
+            if len(clean) == 10 and clean[:2] in valid_area_codes:
+                area_code = clean[:2]
+                number = clean[2:]
+                # If it's a mobile number (starts with 6, 7, 8, or 9) and doesn't have 9 prefix
+                if number[0] in '6789' and not number.startswith('9'):
+                    clean = area_code + '9' + number
+            
+            return clean
+        
+        # Enhanced matching function that tries multiple variants
+        def find_phone_match(target_phone, sheet_data, whatsapp_col_index):
+            clean_target = clean_phone_for_match(target_phone)
+            
+            # Brazilian area codes
+            valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
+            
+            # Create variants to try
+            variants = [clean_target]
+            
+            # If target is 10 digits with area code, try adding mobile prefix
+            if len(clean_target) == 10 and clean_target[:2] in valid_area_codes:
+                area_code = clean_target[:2]
+                number = clean_target[2:]
+                # Add mobile prefix for numbers that start with 6, 7, 8, or 9
+                if number[0] in '6789':
+                    variants.append(area_code + '9' + number)
+            
+            # If target has mobile prefix, also try without it
+            if len(clean_target) == 11 and clean_target[:2] in valid_area_codes:
+                area_code = clean_target[:2]
+                mobile_prefix = clean_target[2]
+                number = clean_target[3:]
+                if mobile_prefix == '9' and number[0] in '6789':
+                    variants.append(area_code + number)
+            
+            print(f"Trying phone variants: {variants}")
+            
+            # Try to find a match with any variant
+            for variant in variants:
+                for i, row in enumerate(sheet_data[1:], start=2):
+                    if whatsapp_col_index < len(row):
+                        sheet_phone = clean_phone_for_match(row[whatsapp_col_index])
+                        if sheet_phone and sheet_phone == variant:
+                            print(f"Found match for variant '{variant}' at row {i}")
+                            return i
+            
+            return None
+        
+        # Find matching row using enhanced matching
+        target_phone = whatsapp_number.split('@')[0] if '@' in whatsapp_number else whatsapp_number
+        target_row = find_phone_match(target_phone, sheet_data, whatsapp_col_index)
         
         if target_row is None:
             print(f"Row with WhatsApp number {whatsapp_number} not found")

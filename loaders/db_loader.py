@@ -88,6 +88,377 @@ def force_refresh_db():
     _download_from_drive(path)
     return path
 
+def get_conversations_summary() -> pd.DataFrame:
+    """Load conversations table with actual message counts calculated from messages table."""
+    db_path = _ensure_db()
+    with sqlite3.connect(db_path) as conn:
+        try:
+            # Check what tables exist
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = [row[0] for row in cursor.fetchall()]
+            
+            if 'conversations' in tables and 'messages' in tables:
+                # Use conversations table with actual message counts from messages table
+                query = """
+                SELECT 
+                    c.conversation_id,
+                    c.display_name,
+                    c.phone_number,
+                    COALESCE(m.actual_message_count, 0) as total_messages,
+                    c.last_message_timestamp,
+                    c.PictureUrl
+                FROM conversations c
+                LEFT JOIN (
+                    SELECT conversation_id, COUNT(*) as actual_message_count
+                    FROM messages
+                    GROUP BY conversation_id
+                ) m ON c.conversation_id = m.conversation_id
+                ORDER BY c.last_message_timestamp DESC
+                """
+            elif 'conversations' in tables:
+                # Fall back to conversations table only
+                query = """
+                SELECT conversation_id, display_name, phone_number, 
+                       total_messages, last_message_timestamp, PictureUrl
+                FROM conversations 
+                ORDER BY last_message_timestamp DESC
+                """
+            else:
+                # Use deepseek_results table
+                query = f"""
+                SELECT conversation_id, display_name, phone_number, 
+                       COALESCE(total_messages, 0) as total_messages, 
+                       last_message_timestamp, PictureUrl
+                FROM {TABLE} 
+                ORDER BY last_message_timestamp DESC
+                """
+            
+            df = pd.read_sql_query(query, conn)
+            
+        except Exception as e:
+            print(f"Error in get_conversations_summary: {e}")
+            # Fallback to getting basic data from deepseek_results
+            try:
+                query = f"SELECT * FROM {TABLE}"
+                df = pd.read_sql_query(query, conn)
+                
+                # Create the required columns if they don't exist
+                if 'total_messages' not in df.columns:
+                    df['total_messages'] = 0
+                if 'conversation_id' not in df.columns and 'whatsapp_number' in df.columns:
+                    df['conversation_id'] = df['whatsapp_number']
+                if 'phone_number' not in df.columns and 'whatsapp_number' in df.columns:
+                    df['phone_number'] = df['whatsapp_number']
+                if 'PictureUrl' not in df.columns:
+                    df['PictureUrl'] = ''
+                    
+            except Exception as e2:
+                print(f"Fallback also failed: {e2}")
+                # Return empty DataFrame with expected columns
+                df = pd.DataFrame(columns=['conversation_id', 'display_name', 'phone_number', 'total_messages', 'last_message_timestamp', 'PictureUrl'])
+                
+    return df
+
+def get_conversation_messages(conversation_id: str) -> pd.DataFrame:
+    """Load full conversation messages for a specific conversation_id."""
+    db_path = _ensure_db()
+    with sqlite3.connect(db_path) as conn:
+        try:
+            # Check what tables exist
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = [row[0] for row in cursor.fetchall()]
+            
+            if 'messages' in tables:
+                query = """
+                SELECT message_id, conversation_id, timestamp, datetime_brt, 
+                       sender, message_text, from_me, message_type
+                FROM messages 
+                WHERE conversation_id = ?
+                ORDER BY timestamp ASC
+                """
+                df = pd.read_sql_query(query, conn, params=(conversation_id,))
+            else:
+                # Return empty DataFrame with expected columns if messages table doesn't exist
+                df = pd.DataFrame(columns=['message_id', 'conversation_id', 'timestamp', 'datetime_brt', 
+                                         'sender', 'message_text', 'from_me', 'message_type'])
+        except Exception as e:
+            print(f"Error in get_conversation_messages: {e}")
+            df = pd.DataFrame(columns=['message_id', 'conversation_id', 'timestamp', 'datetime_brt', 
+                                     'sender', 'message_text', 'from_me', 'message_type'])
+    return df
+
+def get_conversation_details(conversation_id: str) -> dict:
+    """Get detailed information about a specific conversation."""
+    db_path = _ensure_db()
+    with sqlite3.connect(db_path) as conn:
+        try:
+            # Check what tables exist
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = [row[0] for row in cursor.fetchall()]
+            
+            # Get conversation metadata from appropriate table
+            if 'conversations' in tables:
+                conv_query = """
+                SELECT * FROM conversations WHERE conversation_id = ?
+                """
+            else:
+                conv_query = f"""
+                SELECT * FROM {TABLE} WHERE conversation_id = ?
+                """
+            
+            conv_df = pd.read_sql_query(conv_query, conn, params=(conversation_id,))
+            
+            if conv_df.empty:
+                return None
+                
+            conversation = conv_df.iloc[0].to_dict()
+            
+            # Get message count and timestamps from appropriate table
+            if 'messages' in tables:
+                msg_query = """
+                SELECT COUNT(*) as total_messages,
+                       MIN(timestamp) as first_message,
+                       MAX(timestamp) as last_message
+                FROM messages WHERE conversation_id = ?
+                """
+                msg_df = pd.read_sql_query(msg_query, conn, params=(conversation_id,))
+            else:
+                # Try to get from conversation_history or similar field in deepseek_results
+                msg_df = pd.DataFrame([{
+                    'total_messages': conversation.get('total_messages', 0),
+                    'first_message': 0,
+                    'last_message': conversation.get('last_message_timestamp', 0)
+                }])
+        except Exception as e:
+            print(f"Error in get_conversation_details: {e}")
+            return None
+        
+        if not msg_df.empty:
+            conversation.update(msg_df.iloc[0].to_dict())
+            
+    return conversation
+
+def get_conversations_with_sheets_data() -> pd.DataFrame:
+    """Load conversations summary merged with Google Sheets data using advanced variant matching."""
+    try:
+        # Load conversations summary
+        conversations_df = get_conversations_summary()
+        
+        # Load Google Sheets data
+        from services.spreadsheet import get_sheet_data
+        sheet_data = get_sheet_data()
+        
+        if not sheet_data:
+            # Return conversations without merge if sheets data fails
+            return conversations_df
+        
+        # Convert sheet data to DataFrame
+        if len(sheet_data) > 1:
+            headers = sheet_data[0]
+            data_rows = sheet_data[1:]
+            
+            # Handle duplicate column names by adding suffix
+            seen_headers = {}
+            unique_headers = []
+            for header in headers:
+                if header in seen_headers:
+                    seen_headers[header] += 1
+                    unique_headers.append(f"{header}_{seen_headers[header]}")
+                else:
+                    seen_headers[header] = 0
+                    unique_headers.append(header)
+            
+            sheets_df = pd.DataFrame(data_rows, columns=unique_headers)
+            
+            # Advanced phone normalization and variant generation
+            def normalize_phone(phone):
+                if not phone or pd.isna(phone):
+                    return ""
+                
+                import re
+                clean = re.sub(r'[\s\t\n\r]', '', str(phone))
+                clean = re.sub(r'[^0-9]', '', clean)
+                
+                if len(clean) < 8:
+                    return ""
+                
+                if clean.startswith('55') and len(clean) > 10:
+                    clean = clean[2:]
+                
+                valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
+                
+                if len(clean) == 10 and clean[:2] in valid_area_codes:
+                    area_code = clean[:2]
+                    number = clean[2:]
+                    if number[0] in '6789' and not number.startswith('9'):
+                        clean = area_code + '9' + number
+                
+                return clean
+            
+            def generate_variants(phone):
+                """Generate all possible variants of a phone number for aggressive matching"""
+                variants = set()
+                base = normalize_phone(phone)
+                if not base:
+                    return variants
+                
+                # Always add the base version
+                variants.add(base)
+                
+                valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
+                
+                # If 11 digits, try removing the 9
+                if len(base) == 11 and base[:2] in valid_area_codes:
+                    area_code = base[:2]
+                    number = base[2:]
+                    if number[0] == '9':
+                        variants.add(area_code + number[1:])
+                
+                # If 10 digits, AGGRESSIVELY try adding mobile prefix
+                if len(base) == 10 and base[:2] in valid_area_codes:
+                    area_code = base[:2]
+                    number = base[2:]
+                    
+                    # Add 9 prefix for ALL mobile-looking numbers
+                    # This is the key insight - most 10-digit numbers need the 9
+                    if number[0] in '6789':
+                        variants.add(area_code + '9' + number)
+                    
+                    # Also try adding 9 even for numbers starting with other digits
+                    # This covers edge cases where the first digit got corrupted
+                    variants.add(area_code + '9' + number)
+                
+                # If 9 digits, try adding area codes (for partial numbers)
+                if len(base) == 9:
+                    # Try common area codes
+                    for area_code in ['31', '11', '21', '35', '37']:
+                        variants.add(area_code + base)
+                        variants.add(area_code + '9' + base)
+                
+                # If 8 digits, try adding area code + mobile prefix
+                if len(base) == 8:
+                    # Try common area codes with mobile prefix
+                    for area_code in ['31', '11', '21', '35', '37']:
+                        variants.add(area_code + '9' + base)
+                        variants.add(area_code + base)
+                
+                return variants
+            
+            # Find the celular column in sheets data
+            celular_col = None
+            for col in sheets_df.columns:
+                if 'celular' in str(col).lower():
+                    celular_col = col
+                    break
+            
+            if celular_col:
+                # Create lookup dictionaries for advanced matching
+                sheet_phone_to_data = {}
+                sheet_variants_to_phone = {}
+                
+                for idx, row in sheets_df.iterrows():
+                    phone = row[celular_col]
+                    variants = generate_variants(phone)
+                    
+                    for variant in variants:
+                        if variant and variant not in sheet_variants_to_phone:
+                            sheet_variants_to_phone[variant] = phone
+                            sheet_phone_to_data[phone] = row
+                
+                # Create additional index for last-8-digit matching
+                sheet_last8_to_phone = {}
+                for variant, phone in sheet_variants_to_phone.items():
+                    if len(variant) >= 8:
+                        last8 = variant[-8:]
+                        if last8 not in sheet_last8_to_phone:
+                            sheet_last8_to_phone[last8] = phone
+                
+                # Perform advanced matching for conversations
+                matched_data = []
+                match_stats = {'exact': 0, 'last8': 0, 'unmatched': 0}
+                
+                for idx, conv_row in conversations_df.iterrows():
+                    phone = conv_row['phone_number']
+                    clean_phone = phone.split('@')[0] if '@' in phone else phone
+                    variants = generate_variants(clean_phone)
+                    
+                    # Strategy 1: Try exact variant matching first
+                    matched = False
+                    for variant in variants:
+                        if variant in sheet_variants_to_phone:
+                            matched_phone = sheet_variants_to_phone[variant]
+                            sheet_row = sheet_phone_to_data[matched_phone]
+                            
+                            # Combine conversation and sheet data
+                            combined_row = conv_row.copy()
+                            for col in sheet_row.index:
+                                if col not in combined_row.index:
+                                    combined_row[col] = sheet_row[col]
+                            combined_row['match_type'] = 'exact'
+                            
+                            matched_data.append(combined_row)
+                            match_stats['exact'] += 1
+                            matched = True
+                            break
+                    
+                    # Strategy 2: Try last-8-digit matching if no exact match
+                    if not matched:
+                        for variant in variants:
+                            if len(variant) >= 8:
+                                last8 = variant[-8:]
+                                if last8 in sheet_last8_to_phone:
+                                    matched_phone = sheet_last8_to_phone[last8]
+                                    sheet_row = sheet_phone_to_data[matched_phone]
+                                    
+                                    # Combine conversation and sheet data
+                                    combined_row = conv_row.copy()
+                                    for col in sheet_row.index:
+                                        if col not in combined_row.index:
+                                            combined_row[col] = sheet_row[col]
+                                    combined_row['match_type'] = 'last8'
+                                    
+                                    matched_data.append(combined_row)
+                                    match_stats['last8'] += 1
+                                    matched = True
+                                    break
+                    
+                    if not matched:
+                        # Add conversation row without sheet data
+                        combined_row = conv_row.copy()
+                        combined_row['match_type'] = 'unmatched'
+                        matched_data.append(combined_row)
+                        match_stats['unmatched'] += 1
+                
+                # Convert to DataFrame
+                if matched_data:
+                    merged_df = pd.DataFrame(matched_data)
+                    
+                    # Print matching statistics
+                    total_matches = match_stats['exact'] + match_stats['last8']
+                    match_rate = (total_matches / len(conversations_df)) * 100
+                    print(f"Advanced matching complete:")
+                    print(f"  Exact matches: {match_stats['exact']}")
+                    print(f"  Last-8-digit matches: {match_stats['last8']}")
+                    print(f"  Unmatched: {match_stats['unmatched']}")
+                    print(f"  Total match rate: {match_rate:.1f}%")
+                    
+                    return merged_df
+                else:
+                    return conversations_df
+            else:
+                print("Warning: 'celular' column not found in sheets data")
+                return conversations_df
+        else:
+            return conversations_df
+            
+    except Exception as e:
+        print(f"Error merging conversations with sheets data: {e}")
+        # Return conversations without merge if there's an error
+        return get_conversations_summary()
+
 def get_db_info() -> dict:
     """Get database file information for debug mode."""
     db_path = _ensure_db()
