@@ -12,6 +12,9 @@ from services.preloader import start_background_preload, display_preloader_statu
 st.set_page_config(page_title="Conversations", layout="wide")
 st.title("💬 Conversations")
 
+# Debug mode check (define early)
+DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
+
 # ─── START BACKGROUND PRELOADER ─────────────────────────────────────────────
 # Start background downloading of all critical files for smooth UX
 if "preloader_started" not in st.session_state:
@@ -298,8 +301,6 @@ try:
     
     # Filter function removed - using widget values directly
     
-    # Debug mode check
-    DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
     if DEBUG:
         st.sidebar.subheader("Debug Info")
         st.sidebar.write(f"Total conversations loaded: {len(conversations_df)}")
