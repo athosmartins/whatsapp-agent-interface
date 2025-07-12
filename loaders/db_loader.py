@@ -17,19 +17,32 @@ def _download_from_drive(dest: str):
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaIoBaseDownload
         
-        # Load credentials from credentials.json file
-        CREDENTIALS_FILE = "credentials.json"
-        if not os.path.exists(CREDENTIALS_FILE):
-            print(f"Error: {CREDENTIALS_FILE} not found. Falling back to gdown.")
-            _download_from_drive_fallback(dest)
-            return
+        # Load credentials from Streamlit secrets or local file
+        credentials_info = None
         
         # Google API scopes
         SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
         
-        # Load credentials
-        with open(CREDENTIALS_FILE, 'r') as f:
-            credentials_info = json.load(f)
+        try:
+            # Try to load from Streamlit secrets first (for production)
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'google_sheets' in st.secrets:
+                credentials_info = dict(st.secrets['google_sheets'])
+                print("Using Google Drive credentials from Streamlit secrets")
+            else:
+                raise Exception("Streamlit secrets not available")
+        except:
+            # Fallback to local credentials.json file (for development)
+            CREDENTIALS_FILE = "credentials.json"
+            if not os.path.exists(CREDENTIALS_FILE):
+                print(f"Error: {CREDENTIALS_FILE} not found and Streamlit secrets not configured.")
+                _download_from_drive_fallback(dest)
+                return
+            
+            # Load credentials
+            with open(CREDENTIALS_FILE, 'r') as f:
+                credentials_info = json.load(f)
+            print("Using Google Drive credentials from local file")
         
         credentials = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
         drive_service = build('drive', 'v3', credentials=credentials)
@@ -331,6 +344,7 @@ def get_conversations_with_sheets_data() -> pd.DataFrame:
         
         if not sheet_data:
             # Return conversations without merge if sheets data fails
+            print("Warning: No Google Sheets data available, returning conversations only")
             return conversations_df
         
         # Convert sheet data to DataFrame
@@ -522,6 +536,7 @@ def get_conversations_with_sheets_data() -> pd.DataFrame:
                     print(f"  Last-8-digit matches: {match_stats['last8']}")
                     print(f"  Unmatched: {match_stats['unmatched']}")
                     print(f"  Total match rate: {match_rate:.1f}%")
+                    print(f"  Merged DataFrame columns: {list(merged_df.columns)}")
                     
                     return merged_df
                 else:

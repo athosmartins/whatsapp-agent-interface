@@ -139,6 +139,26 @@ try:
     # Format timestamps
     conversations_df['last_message_date'] = conversations_df['last_message_timestamp'].apply(format_timestamp)
     
+    # Debug: Show available columns in production
+    if DEBUG:
+        st.sidebar.write("Available columns:", list(conversations_df.columns))
+        st.sidebar.write("DataFrame shape:", conversations_df.shape)
+        if len(conversations_df) > 0:
+            # Check if key columns exist
+            key_columns = ['Nome', 'CPF', 'endereco_bairro', 'endereco', 'Classificação do dono do número']
+            for col in key_columns:
+                exists = col in conversations_df.columns
+                st.sidebar.write(f"{col}: {'✅' if exists else '❌'}")
+    
+    # Check if we have merged data or just basic conversations
+    has_sheets_data = any(col in conversations_df.columns for col in ['Nome', 'CPF', 'endereco_bairro', 'Classificação do dono do número'])
+    
+    if not has_sheets_data:
+        st.warning("⚠️ Google Sheets integration not available. Only basic conversation data is loaded. Some filters may be disabled.")
+        st.info(f"📊 Loaded {len(conversations_df)} conversations (basic data only)")
+    else:
+        st.success(f"📊 Loaded {len(conversations_df)} conversations with integrated Google Sheets data")
+    
     # Filter section
     st.subheader("🔍 Filter Conversations")
     
@@ -394,6 +414,8 @@ try:
         
         # === INFORMAÇÕES PESSOAIS ===
         st.markdown("### 👤 Informações Pessoais")
+        if not has_sheets_data:
+            st.info("ℹ️ Expected Name and CPF filters require Google Sheets integration")
         col1, col2, col3 = st.columns(3)
         
         with col1:
@@ -470,6 +492,8 @@ try:
         
         # === IMÓVEL ===
         st.markdown("### 🏠 Imóvel")
+        if not has_sheets_data:
+            st.warning("🔗 Filters below require Google Sheets integration")
         col5, col6, col7 = st.columns(3)
         
         with col5:
@@ -525,6 +549,8 @@ try:
         
         # === QUALIFICAÇÃO ===
         st.markdown("### ✅ Qualificação")
+        if not has_sheets_data:
+            st.warning("🔗 Filters below require Google Sheets integration")
         col8, col9 = st.columns(2)
         
         with col8:

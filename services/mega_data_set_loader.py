@@ -37,11 +37,8 @@ def download_latest_mega_data_set() -> Optional[str]:
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaIoBaseDownload
         
-        # Load credentials from credentials.json file
-        CREDENTIALS_FILE = "credentials.json"
-        if not os.path.exists(CREDENTIALS_FILE):
-            print(f"Error: {CREDENTIALS_FILE} not found. Please ensure credentials.json exists in the project root.")
-            return None
+        # Load credentials from Streamlit secrets or local file
+        credentials_info = None
         
         # Google API scopes - try both full and readonly access
         SCOPES_FULL = [
@@ -54,9 +51,24 @@ def download_latest_mega_data_set() -> Optional[str]:
             "https://www.googleapis.com/auth/drive.readonly",
         ]
         
-        # Load credentials
-        with open(CREDENTIALS_FILE, 'r') as f:
-            credentials_info = json.load(f)
+        try:
+            # Try to load from Streamlit secrets first (for production)
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'google_sheets' in st.secrets:
+                credentials_info = dict(st.secrets['google_sheets'])
+                print("Using Google Drive credentials from Streamlit secrets")
+            else:
+                raise Exception("Streamlit secrets not available")
+        except:
+            # Fallback to local credentials.json file (for development)
+            CREDENTIALS_FILE = "credentials.json"
+            if not os.path.exists(CREDENTIALS_FILE):
+                print(f"Error: {CREDENTIALS_FILE} not found and Streamlit secrets not configured.")
+                return None
+            
+            with open(CREDENTIALS_FILE, 'r') as f:
+                credentials_info = json.load(f)
+            print("Using Google Drive credentials from local file")
         
         # Try to create Drive service with different scope combinations
         drive_service = None
@@ -76,7 +88,7 @@ def download_latest_mega_data_set() -> Optional[str]:
         
         if not drive_service:
             print("❌ Could not authenticate with Google Drive API. Please ensure:")
-            print("   1. credentials.json is valid")
+            print("   1. Credentials are properly configured (Streamlit secrets or credentials.json)")
             print("   2. Google Drive API is enabled for this service account")
             print("   3. Service account has access to the folder")
             return None

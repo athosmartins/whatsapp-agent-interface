@@ -14,9 +14,31 @@ SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 def get_sheets_service():
     """Initialize and return Google Sheets API service."""
     try:
-        credentials = Credentials.from_service_account_file(
-            CREDENTIALS_FILE, scopes=SCOPES
-        )
+        # Try to load from Streamlit secrets first (for production)
+        credentials_info = None
+        
+        try:
+            import streamlit as st
+            if hasattr(st, 'secrets') and 'google_sheets' in st.secrets:
+                credentials_info = dict(st.secrets['google_sheets'])
+                credentials = Credentials.from_service_account_info(
+                    credentials_info, scopes=SCOPES
+                )
+                print("Using Google Sheets credentials from Streamlit secrets")
+            else:
+                raise Exception("Streamlit secrets not available")
+        except:
+            # Fallback to local credentials.json file (for development)
+            import os
+            if not os.path.exists(CREDENTIALS_FILE):
+                print(f"Error: {CREDENTIALS_FILE} not found and Streamlit secrets not configured.")
+                return None
+            
+            credentials = Credentials.from_service_account_file(
+                CREDENTIALS_FILE, scopes=SCOPES
+            )
+            print("Using Google Sheets credentials from local file")
+        
         service = build('sheets', 'v4', credentials=credentials)
         return service
     except Exception as e:
