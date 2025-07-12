@@ -1904,36 +1904,16 @@ def show_property_map():
     # Map style selector
     from utils.property_map import get_property_map_summary, render_property_map_streamlit, get_available_map_styles
     
-    # Create columns for map controls
-    col1, col2 = st.columns([3, 1])
-    
-    with col2:
-        available_styles = get_available_map_styles()
-        selected_style = st.selectbox(
-            "🎨 Estilo do Mapa",
-            options=list(available_styles.keys()),
-            format_func=lambda x: available_styles[x],
-            key=f"map_style_{phone_number}",
-            index=0,  # Default to OpenStreetMap
-            help="Escolha o estilo de visualização do mapa"
-        )
-        
-        # Show style description
-        style_descriptions = {
-            "OpenStreetMap": "Mapa padrão com ruas e edifícios",
-            "Satellite": "Imagem de satélite em alta resolução",
-            "Terrain": "Mapa topográfico com relevo",
-            "Streets": "Foco em vias e navegação",
-            "Physical": "Características geográficas naturais",
-            "Light": "Estilo claro e minimalista",
-            "Dark": "Estilo escuro para menos brilho"
-        }
-        
-        if selected_style in style_descriptions:
-            st.caption(style_descriptions[selected_style])
-    
-    with col1:
-        st.write("")  # Empty space for alignment
+    # Map style selector (full width)
+    available_styles = get_available_map_styles()
+    selected_style = st.selectbox(
+        "🎨 Estilo do Mapa",
+        options=list(available_styles.keys()),
+        format_func=lambda x: available_styles[x],
+        key=f"map_style_{phone_number}",
+        index=0,  # Default to "Light" (first in the list)
+        help="Escolha o estilo de visualização do mapa"
+    )
     
     # Show property summary
     summary = get_property_map_summary(properties)
@@ -1970,7 +1950,7 @@ def show_property_map():
     
     # Render the interactive map with selected style
     try:
-        render_property_map_streamlit(properties, map_style=selected_style)
+        render_property_map_streamlit(properties, map_style=selected_style, enable_extra_options=True)
     except Exception as e:
         st.error(f"Erro ao carregar mapa: {e}")
         st.info("💡 Para ver o mapa, instale as dependências: `pip install folium streamlit-folium`")

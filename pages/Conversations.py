@@ -305,6 +305,28 @@ try:
         st.sidebar.subheader("Debug Info")
         st.sidebar.write(f"Total conversations loaded: {len(conversations_df)}")
         st.sidebar.write(f"Available columns: {list(conversations_df.columns)}")
+        
+        # Debug archived and unread_count columns
+        if 'archived' in conversations_df.columns:
+            archived_counts = conversations_df['archived'].value_counts()
+            st.sidebar.write(f"Archived column values: {dict(archived_counts)}")
+            st.sidebar.write(f"Archived column dtype: {conversations_df['archived'].dtype}")
+        else:
+            st.sidebar.write("❌ 'archived' column not found")
+            
+        if 'unread_count' in conversations_df.columns:
+            unread_counts = conversations_df['unread_count'].value_counts().head(10)
+            st.sidebar.write(f"Unread count values (top 10): {dict(unread_counts)}")
+            st.sidebar.write(f"Unread count dtype: {conversations_df['unread_count'].dtype}")
+            unread_greater_than_0 = (conversations_df['unread_count'] > 0).sum()
+            st.sidebar.write(f"Conversations with unread_count > 0: {unread_greater_than_0}")
+        else:
+            st.sidebar.write("❌ 'unread_count' column not found")
+        
+        # Debug filter checkboxes
+        st.sidebar.write(f"Only unarchived filter: {st.session_state.get('only_unarchived_filter', False)}")
+        st.sidebar.write(f"Only unread filter: {st.session_state.get('only_unread_filter', False)}")
+        
         # st.sidebar.write("Filter state:", st.session_state.filter_state)
         
         # Cache clear button
@@ -588,6 +610,26 @@ try:
                 key="status_filter"
             )
         
+        # === CONVERSA ===
+        st.markdown("### 💬 Conversa")
+        col_conv1, col_conv2 = st.columns(2)
+        
+        with col_conv1:
+            only_unarchived = st.checkbox(
+                "📁 Apenas não arquivadas",
+                value=False,
+                key="only_unarchived_filter",
+                help="Mostrar apenas conversas não arquivadas"
+            )
+        
+        with col_conv2:
+            only_unread = st.checkbox(
+                "👁️ Apenas não lidas",
+                value=False,
+                key="only_unread_filter",
+                help="Mostrar apenas conversas com mensagens não lidas"
+            )
+        
         # === ACTIONS & METRICS ===
         st.markdown("### ⚙️ Ações")
         col10, col11, col12 = st.columns(3)
@@ -597,7 +639,8 @@ try:
             if st.button("🗑️ Clear All Filters", type="secondary"):
                 # Clear all filter widget states
                 for key in ['display_name_filter', 'phone_filter', 'expected_name_filter', 'cpf_filter',
-                           'classificacao_filter', 'bairro_filter', 'status_filter', 'endereco_filter', 'complemento_filter']:
+                           'classificacao_filter', 'bairro_filter', 'status_filter', 'endereco_filter', 'complemento_filter',
+                           'only_unarchived_filter', 'only_unread_filter']:
                     if key in st.session_state:
                         del st.session_state[key]
                 st.rerun()
@@ -606,7 +649,9 @@ try:
             # Show active filters count (using the cleaned variable names)
             all_filters = [selected_display_names, selected_phone_numbers, selected_expected_names, selected_cpfs,
                           selected_classificacoes, selected_bairros, selected_statuses, selected_enderecos, selected_complementos]
-            active_filters = sum(1 for filter_list in all_filters if filter_list)
+            # Add checkbox filters
+            checkbox_filters = [only_unarchived, only_unread]
+            active_filters = sum(1 for filter_list in all_filters if filter_list) + sum(1 for checkbox in checkbox_filters if checkbox)
             if active_filters > 0:
                 st.metric("🔍 Active Filters", active_filters)
     
@@ -676,6 +721,21 @@ try:
         # Apply complemento filter
         if selected_complementos and 'endereco_complemento' in filtered_df.columns:
             filtered_df = filtered_df[filtered_df['endereco_complemento'].isin(selected_complementos)]
+        
+        # Apply conversation state filters
+        if only_unarchived and 'archived' in filtered_df.columns:
+            before_count = len(filtered_df)
+            # Show only unarchived conversations (archived = False or 0)
+            filtered_df = filtered_df[filtered_df['archived'].isin([False, 0])]
+            if DEBUG:
+                st.sidebar.write(f"Unarchived filter: {before_count} → {len(filtered_df)}")
+        
+        if only_unread and 'unread_count' in filtered_df.columns:
+            before_count = len(filtered_df)
+            # Show only conversations with unread messages (unread_count > 0)
+            filtered_df = filtered_df[filtered_df['unread_count'] > 0]
+            if DEBUG:
+                st.sidebar.write(f"Unread filter: {before_count} → {len(filtered_df)}")
     
     except Exception as e:
         st.error(f"Error applying filters: {e}")

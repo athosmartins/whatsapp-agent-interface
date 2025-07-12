@@ -198,7 +198,9 @@ def get_conversations_summary() -> pd.DataFrame:
                     c.phone_number,
                     COALESCE(m.actual_message_count, 0) as total_messages,
                     c.last_message_timestamp,
-                    c.PictureUrl
+                    c.PictureUrl,
+                    c.archived,
+                    c.unread_count
                 FROM conversations c
                 LEFT JOIN (
                     SELECT conversation_id, COUNT(*) as actual_message_count
@@ -211,7 +213,8 @@ def get_conversations_summary() -> pd.DataFrame:
                 # Fall back to conversations table only
                 query = """
                 SELECT conversation_id, display_name, phone_number, 
-                       total_messages, last_message_timestamp, PictureUrl
+                       total_messages, last_message_timestamp, PictureUrl,
+                       archived, unread_count
                 FROM conversations 
                 ORDER BY last_message_timestamp DESC
                 """
