@@ -10,7 +10,9 @@ __pycache__/
 app_gpt.py
 app_claude.py
 test.py
-CLAUDE.md
+
+# Claude Code IDE configuration (local only)
+.claude/
 
 # Temporary analysis files
 analysis_temp/

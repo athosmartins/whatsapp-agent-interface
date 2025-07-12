@@ -22,6 +22,7 @@ from loaders.db_loader import get_dataframe, get_db_info, get_conversation_messa
 from services.spreadsheet import sync_record_to_sheet
 from services.voxuy_api import send_whatsapp_message
 from services.mega_data_set_loader import get_properties_for_phone, format_property_for_display
+from services.preloader import start_background_preload, display_preloader_status
 from utils.styles import STYLES
 from utils.ui_helpers import (
     bold_asterisks,
@@ -161,11 +162,20 @@ def find_conversations_with_same_property(current_property_address, current_prop
 # ─── PAGE CONFIG (MUST BE FIRST) ────────────────────────────────────────
 st.set_page_config(page_title="Processador de Conversas", page_icon="📱", layout="wide")
 
+# ─── START BACKGROUND PRELOADER ─────────────────────────────────────────────
+# Start background downloading of all critical files for smooth UX
+if "preloader_started" not in st.session_state:
+    st.session_state.preloader_started = True
+    start_background_preload()
+
 # ─── FLAGS ──────────────────────────────────────────────────────────────────
 DEV = True  # Set based on your environment
 
 # Debug mode check
 DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
+
+# Display preloader status in sidebar
+display_preloader_status()
 
 # LOGIN_ENABLED flag - can be controlled via environment variable or hardcoded
 LOGIN_ENABLED = True  # Default value
@@ -1866,6 +1876,124 @@ if hasattr(st.session_state, 'property_modal_data') and st.session_state.propert
     
     # Show the modal
     show_property_modal()
+
+# ─── PROPERTY MAP SECTION ──────────────────────────────────────────────────
+def show_property_map():
+    """Show interactive map of all properties owned by this person."""
+    phone_number = row['whatsapp_number']
+    
+    if not phone_number:
+        return
+    
+    # Use session state to cache properties for this phone number during the same session
+    cache_key = f"properties_{phone_number}"
+    
+    if cache_key not in st.session_state:
+        # Get properties for this phone number
+        from services.mega_data_set_loader import get_properties_for_phone
+        st.session_state[cache_key] = get_properties_for_phone(phone_number)
+    
+    properties = st.session_state[cache_key]
+    
+    if not properties:
+        return
+    
+    st.header("🗺️ Mapa de Propriedades")
+    st.write("Visualização geográfica de todas as propriedades associadas a este contato:")
+    
+    # Map style selector
+    from utils.property_map import get_property_map_summary, render_property_map_streamlit, get_available_map_styles
+    
+    # Create columns for map controls
+    col1, col2 = st.columns([3, 1])
+    
+    with col2:
+        available_styles = get_available_map_styles()
+        selected_style = st.selectbox(
+            "🎨 Estilo do Mapa",
+            options=list(available_styles.keys()),
+            format_func=lambda x: available_styles[x],
+            key=f"map_style_{phone_number}",
+            index=0,  # Default to OpenStreetMap
+            help="Escolha o estilo de visualização do mapa"
+        )
+        
+        # Show style description
+        style_descriptions = {
+            "OpenStreetMap": "Mapa padrão com ruas e edifícios",
+            "Satellite": "Imagem de satélite em alta resolução",
+            "Terrain": "Mapa topográfico com relevo",
+            "Streets": "Foco em vias e navegação",
+            "Physical": "Características geográficas naturais",
+            "Light": "Estilo claro e minimalista",
+            "Dark": "Estilo escuro para menos brilho"
+        }
+        
+        if selected_style in style_descriptions:
+            st.caption(style_descriptions[selected_style])
+    
+    with col1:
+        st.write("")  # Empty space for alignment
+    
+    # Show property summary
+    summary = get_property_map_summary(properties)
+    
+    if summary:
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Total de Propriedades", summary['total_properties'])
+            st.metric("Com Dados Geográficos", summary['mappable_properties'])
+        
+        with col2:
+            if summary['total_area_terreno'] > 0:
+                st.metric("Área Total Terreno", f"{summary['total_area_terreno']:,.0f} m²")
+            if summary['total_area_construcao'] > 0:
+                st.metric("Área Total Construção", f"{summary['total_area_construcao']:,.0f} m²")
+        
+        with col3:
+            if summary['total_valor'] > 0:
+                valor_formatado = f"R$ {summary['total_valor']:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+                st.metric("Valor Total (NET)", valor_formatado)
+        
+        # Show property types breakdown
+        if summary['property_types']:
+            st.subheader("📊 Tipos de Propriedades")
+            types_df = pd.DataFrame(list(summary['property_types'].items()), columns=['Tipo', 'Quantidade'])
+            st.dataframe(types_df, hide_index=True, use_container_width=True)
+        
+        # Show neighborhoods breakdown
+        if summary['neighborhoods']:
+            st.subheader("📍 Bairros")
+            neighborhoods_df = pd.DataFrame(list(summary['neighborhoods'].items()), columns=['Bairro', 'Quantidade'])
+            st.dataframe(neighborhoods_df, hide_index=True, use_container_width=True)
+    
+    # Render the interactive map with selected style
+    try:
+        render_property_map_streamlit(properties, map_style=selected_style)
+    except Exception as e:
+        st.error(f"Erro ao carregar mapa: {e}")
+        st.info("💡 Para ver o mapa, instale as dependências: `pip install folium streamlit-folium`")
+        
+        # Show fallback property list
+        st.subheader("📋 Lista de Propriedades")
+        properties_data = []
+        for prop in properties:
+            properties_data.append({
+                'Endereço': prop.get('ENDERECO', 'N/A'),
+                'Bairro': prop.get('BAIRRO', 'N/A'),
+                'Tipo': prop.get('TIPO CONSTRUTIVO', 'N/A'),
+                'Área Terreno': prop.get('AREA TERRENO', 'N/A'),
+                'Área Construção': prop.get('AREA CONSTRUCAO', 'N/A'),
+                'Índice Cadastral': prop.get('INDICE CADASTRAL', 'N/A')
+            })
+        
+        if properties_data:
+            properties_df = pd.DataFrame(properties_data)
+            st.dataframe(properties_df, hide_index=True, use_container_width=True)
+
+# Show property map if we have properties
+show_property_map()
 
 # ─── FOOTER CAPTION ─────────────────────────────────────────────────────────
 st.caption(

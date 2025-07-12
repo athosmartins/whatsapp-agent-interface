@@ -1,6 +1,7 @@
 """Google Sheets integration service for WhatsApp conversation data."""
 
 from typing import Any, Dict, List
+import streamlit as st
 
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -21,6 +22,88 @@ def get_sheets_service():
     except Exception as e:
         print(f"Error initializing Google Sheets service: {e}")
         return None
+
+def clean_phone_for_match(phone):
+    """Clean phone numbers for matching - Enhanced algorithm."""
+    if not phone:
+        return ""
+    
+    # Clean whitespace and special characters
+    import re
+    clean = re.sub(r'[\s\t\n\r]', '', str(phone))
+    clean = re.sub(r'[^0-9]', '', clean)
+    
+    # Handle edge cases where phone might be too short
+    if len(clean) < 8:
+        return ""
+    
+    # Remove country code if present (55 for Brazil)
+    if clean.startswith('55') and len(clean) > 10:
+        clean = clean[2:]
+    
+    # Brazilian area codes
+    valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
+    
+    # If 10 digits and starts with valid area code, add mobile prefix
+    if len(clean) == 10 and clean[:2] in valid_area_codes:
+        area_code = clean[:2]
+        number = clean[2:]
+        # If it's a mobile number (starts with 6, 7, 8, or 9) and doesn't have 9 prefix
+        if number[0] in '6789' and not number.startswith('9'):
+            clean = area_code + '9' + number
+    
+    return clean
+
+@st.cache_data(ttl=1800)  # Cache for 30 minutes
+def find_phone_match(target_phone, sheet_data):
+    """Enhanced matching function that tries multiple variants."""
+    if not sheet_data or len(sheet_data) < 2:
+        return None
+        
+    # Find WhatsApp column
+    headers = sheet_data[0]
+    whatsapp_col_index = None
+    for i, header in enumerate(headers):
+        if 'celular' in str(header).lower() or 'whatsapp' in str(header).lower() or 'phone' in str(header).lower():
+            whatsapp_col_index = i
+            break
+    
+    if whatsapp_col_index is None:
+        return None
+    
+    clean_target = clean_phone_for_match(target_phone)
+    
+    # Brazilian area codes
+    valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
+    
+    # Create variants to try
+    variants = [clean_target]
+    
+    # If target is 10 digits with area code, try adding mobile prefix
+    if len(clean_target) == 10 and clean_target[:2] in valid_area_codes:
+        area_code = clean_target[:2]
+        number = clean_target[2:]
+        # Add mobile prefix for numbers that start with 6, 7, 8, or 9
+        if number[0] in '6789':
+            variants.append(area_code + '9' + number)
+    
+    # If target has mobile prefix, also try without it
+    if len(clean_target) == 11 and clean_target[:2] in valid_area_codes:
+        area_code = clean_target[:2]
+        mobile_prefix = clean_target[2]
+        number = clean_target[3:]
+        if mobile_prefix == '9' and number[0] in '6789':
+            variants.append(area_code + number)
+    
+    # Try to find a match with any variant
+    for variant in variants:
+        for i, row in enumerate(sheet_data[1:], start=1):
+            if whatsapp_col_index < len(row):
+                sheet_phone = clean_phone_for_match(row[whatsapp_col_index])
+                if sheet_phone and sheet_phone == variant:
+                    return (row, i)
+    
+    return None
 
 def get_sheet_data(sheet_name: str = "report", range_name: str = None) -> List[List]:
     """Read data from Google Sheet using batch get method."""

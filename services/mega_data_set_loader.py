@@ -264,6 +264,7 @@ def get_mega_data_set_schema() -> Dict[str, str]:
     
     return schema
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def find_properties_by_documento(documento_proprietario: str) -> List[Dict]:
     """
     Find all properties that belong to a specific document holder (CPF).
@@ -294,7 +295,6 @@ def find_properties_by_documento(documento_proprietario: str) -> List[Dict]:
         if row_documento == clean_documento:
             matching_rows.append(row.to_dict())
     
-    print(f"Found {len(matching_rows)} properties for documento {documento_proprietario}")
     return matching_rows
 
 def clean_document_number(documento: str) -> str:
@@ -323,6 +323,7 @@ def clean_document_number(documento: str) -> str:
     
     return clean
 
+@st.cache_data(ttl=3600)  # Cache for 1 hour
 def get_properties_for_phone(phone_number: str) -> List[Dict]:
     """
     Get all properties for a given phone number.
@@ -342,7 +343,6 @@ def get_properties_for_phone(phone_number: str) -> List[Dict]:
         clean_phone = clean_phone_for_match(phone_number)
         for test_phone, test_cpf in test_phone_mappings.items():
             if clean_phone_for_match(test_phone) == clean_phone:
-                print(f"Found test phone mapping: {phone_number} -> CPF {test_cpf}")
                 properties = find_properties_by_documento(test_cpf)
                 return properties
         
@@ -375,22 +375,21 @@ def get_properties_for_phone(phone_number: str) -> List[Dict]:
             print("CPF or phone column not found in spreadsheet")
             return []
         
-        # Find matching phone number and get CPF
-        target_phone = clean_phone_for_match(phone_number)
+        # Find matching phone number and get CPF using enhanced matching logic
+        from services.spreadsheet import find_phone_match
+        
+        # Use the same enhanced matching logic as spreadsheet.py
+        match_result = find_phone_match(phone_number, sheet_data)
         cpf = None
         
-        for row in sheet_data[1:]:  # Skip header row
-            if phone_col_index < len(row) and cpf_col_index < len(row):
-                sheet_phone = clean_phone_for_match(row[phone_col_index])
-                if sheet_phone == target_phone:
-                    cpf = row[cpf_col_index]
-                    break
+        if match_result:
+            matched_row, _ = match_result
+            if cpf_col_index < len(matched_row):
+                cpf = matched_row[cpf_col_index]
         
         if not cpf:
             print(f"CPF not found for phone number {phone_number}")
             return []
-        
-        print(f"Found CPF {cpf} for phone {phone_number}")
         
         # Step 2: Get properties from mega_data_set using CPF
         properties = find_properties_by_documento(cpf)

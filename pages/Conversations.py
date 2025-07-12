@@ -6,10 +6,20 @@ from datetime import datetime
 import re
 
 from loaders.db_loader import get_conversations_summary, get_conversation_messages, get_conversation_details, get_conversations_with_sheets_data
+from services.preloader import start_background_preload, display_preloader_status
 
 # Page config
 st.set_page_config(page_title="Conversations", layout="wide")
 st.title("💬 Conversations")
+
+# ─── START BACKGROUND PRELOADER ─────────────────────────────────────────────
+# Start background downloading of all critical files for smooth UX
+if "preloader_started" not in st.session_state:
+    st.session_state.preloader_started = True
+    start_background_preload()
+
+# Display preloader status in sidebar
+display_preloader_status()
 
 # Load conversations summary with merged sheets data (optimized for filtering)
 @st.cache_data(ttl=60)  # Cache for 1 minute only to see changes faster
@@ -173,6 +183,44 @@ try:
             else:
                 options['bairros'] = []
             
+            # Expected Names
+            if exclude_filter != 'expected_names':
+                expected_names = []
+                # Try both 'Nome' (from spreadsheet) and 'expected_name' columns
+                for col in ['Nome', 'expected_name']:
+                    if col in current_df.columns:
+                        names = [str(name).strip() for name in current_df[col].dropna().unique() if str(name).strip()]
+                        # Filter out garbage data similar to display names
+                        for name in names:
+                            if (name and 
+                                len(name) > 1 and 
+                                not name.isdigit() and 
+                                not name.startswith('+') and
+                                any(c.isalpha() for c in name)):
+                                expected_names.append(name)
+                options['expected_names'] = sorted(list(set(expected_names)), key=lambda x: x.lower())
+            else:
+                options['expected_names'] = []
+            
+            # CPF
+            if exclude_filter != 'cpfs':
+                cpfs = []
+                # Look for CPF in spreadsheet columns
+                for col in ['CPF', 'cpf', 'documento', 'Documento']:
+                    if col in current_df.columns:
+                        cpf_values = [str(cpf).strip() for cpf in current_df[col].dropna().unique() if str(cpf).strip()]
+                        # Filter valid CPF format (11 digits)
+                        for cpf in cpf_values:
+                            # Remove any formatting and check if it's 11 digits
+                            clean_cpf = ''.join(filter(str.isdigit, cpf))
+                            if len(clean_cpf) == 11 and clean_cpf != '00000000000':
+                                # Format CPF for display: 000.000.000-00
+                                formatted_cpf = f"{clean_cpf[:3]}.{clean_cpf[3:6]}.{clean_cpf[6:9]}-{clean_cpf[9:]}"
+                                cpfs.append(formatted_cpf)
+                options['cpfs'] = sorted(list(set(cpfs)), key=lambda x: x.lower())
+            else:
+                options['cpfs'] = []
+            
             # Classificações
             if exclude_filter != 'classificacoes' and 'Classificação do dono do número' in current_df.columns:
                 classificacoes = [str(cls).strip() for cls in current_df['Classificação do dono do número'].dropna().unique() if str(cls).strip()]
@@ -220,6 +268,8 @@ try:
                 'display_names': [],
                 'phone_numbers': [],
                 'bairros': [],
+                'expected_names': [],
+                'cpfs': [],
                 'classificacoes': [],
                 'statuses': [],
                 'enderecos': [],
@@ -267,127 +317,271 @@ try:
             st.sidebar.write(f"Endereco data: {endereco_count} non-null values, {unique_enderecos} unique")
     
     try:
-        # Get initial options for all filters
-        all_options = get_filtered_options(conversations_df)
+        # Helper function to apply filters and get current dataset for cascading
+        def get_current_filtered_dataset(exclude_filter_key=None):
+            """
+            Apply all current filter selections EXCEPT the one being calculated
+            to get the dataset for cascading filter options.
+            """
+            current_df = conversations_df.copy()
+            
+            # Get current filter values from session state
+            current_filters = {
+                'display_names': st.session_state.get('display_name_filter', []),
+                'phone_numbers': st.session_state.get('phone_filter', []),
+                'expected_names': st.session_state.get('expected_name_filter', []),
+                'cpfs': st.session_state.get('cpf_filter', []),
+                'classificacoes': st.session_state.get('classificacao_filter', []),
+                'bairros': st.session_state.get('bairro_filter', []),
+                'statuses': st.session_state.get('status_filter', []),
+                'enderecos': st.session_state.get('endereco_filter', []),
+                'complementos': st.session_state.get('complemento_filter', [])
+            }
+            
+            # Apply all filters except the one being excluded
+            if exclude_filter_key != 'display_names' and current_filters['display_names']:
+                current_df = current_df[current_df['display_name'].isin(current_filters['display_names'])]
+            
+            if exclude_filter_key != 'phone_numbers' and current_filters['phone_numbers']:
+                current_df = current_df[current_df['formatted_phone'].isin(current_filters['phone_numbers'])]
+            
+            if exclude_filter_key != 'expected_names' and current_filters['expected_names']:
+                if 'Nome' in current_df.columns:
+                    current_df = current_df[current_df['Nome'].isin(current_filters['expected_names'])]
+                elif 'expected_name' in current_df.columns:
+                    current_df = current_df[current_df['expected_name'].isin(current_filters['expected_names'])]
+            
+            if exclude_filter_key != 'cpfs' and current_filters['cpfs']:
+                # Apply CPF filter with format matching
+                cpf_matched = False
+                for col in ['CPF', 'cpf', 'documento', 'Documento']:
+                    if col in current_df.columns and not cpf_matched:
+                        def format_cpf_for_match(cpf_val):
+                            if pd.isna(cpf_val):
+                                return ""
+                            clean_cpf = ''.join(filter(str.isdigit, str(cpf_val)))
+                            if len(clean_cpf) == 11:
+                                return f"{clean_cpf[:3]}.{clean_cpf[3:6]}.{clean_cpf[6:9]}-{clean_cpf[9:]}"
+                            return ""
+                        
+                        current_df['temp_formatted_cpf'] = current_df[col].apply(format_cpf_for_match)
+                        current_df = current_df[current_df['temp_formatted_cpf'].isin(current_filters['cpfs'])]
+                        current_df = current_df.drop('temp_formatted_cpf', axis=1)
+                        cpf_matched = True
+            
+            if exclude_filter_key != 'classificacoes' and current_filters['classificacoes']:
+                if 'Classificação do dono do número' in current_df.columns:
+                    current_df = current_df[current_df['Classificação do dono do número'].isin(current_filters['classificacoes'])]
+            
+            if exclude_filter_key != 'bairros' and current_filters['bairros']:
+                if 'endereco_bairro' in current_df.columns:
+                    current_df = current_df[current_df['endereco_bairro'].isin(current_filters['bairros'])]
+            
+            if exclude_filter_key != 'statuses' and current_filters['statuses']:
+                status_col = 'status' if 'status' in current_df.columns else 'status_manual'
+                if status_col in current_df.columns:
+                    current_df = current_df[current_df[status_col].isin(current_filters['statuses'])]
+            
+            if exclude_filter_key != 'enderecos' and current_filters['enderecos']:
+                if 'endereco' in current_df.columns:
+                    current_df = current_df[current_df['endereco'].isin(current_filters['enderecos'])]
+            
+            if exclude_filter_key != 'complementos' and current_filters['complementos']:
+                if 'endereco_complemento' in current_df.columns:
+                    current_df = current_df[current_df['endereco_complemento'].isin(current_filters['complementos'])]
+                    
+            return current_df
         
-        # First row of filters
+        # === INFORMAÇÕES PESSOAIS ===
+        st.markdown("### 👤 Informações Pessoais")
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            # Display name filter - always show all available display names
-            available_display_names = get_filtered_options(conversations_df)['display_names']
+            # Display name filter - get options based on other filters
+            current_df = get_current_filtered_dataset(exclude_filter_key='display_names')
+            available_display_names = get_filtered_options(current_df)['display_names']
             
-            # Simple fix: Re-sort the options right before passing to multiselect
-            # This ensures they start in alphabetical order
-            available_display_names_sorted = sorted(available_display_names, key=lambda x: x.lower())
+            # Preserve currently selected values by adding them to options if not present
+            current_selections = st.session_state.get('display_name_filter', [])
+            all_options = list(set(available_display_names + current_selections))
+            available_display_names_sorted = sorted(all_options, key=lambda x: x.lower())
             
             selected_display_names = st.multiselect(
-                "Display Name:",
+                "🔤 Display Name:",
                 options=available_display_names_sorted,
+                default=current_selections,
                 key="display_name_filter"
             )
     
         with col2:
-            # Phone number filter - always show all available phone numbers
-            available_phone_numbers = get_filtered_options(conversations_df)['phone_numbers']
-            available_phone_numbers_sorted = sorted(available_phone_numbers, key=lambda x: x.lower())
+            # Expected Name filter - get options based on other filters
+            current_df = get_current_filtered_dataset(exclude_filter_key='expected_names')
+            available_expected_names = get_filtered_options(current_df)['expected_names']
             
-            selected_phone_numbers = st.multiselect(
-                "Phone Number:",
-                options=available_phone_numbers_sorted,
-                key="phone_filter"
-            )
-    
-        with col3:
-            # Classificação filter - always show all available classificacoes
-            available_classificacoes = get_filtered_options(conversations_df)['classificacoes']
-            available_classificacoes_sorted = sorted(available_classificacoes, key=lambda x: x.lower())
+            # Preserve currently selected values
+            current_selections = st.session_state.get('expected_name_filter', [])
+            all_options = list(set(available_expected_names + current_selections))
+            available_expected_names_sorted = sorted(all_options, key=lambda x: x.lower())
             
-            selected_classificacoes = st.multiselect(
-                "Classificação:",
-                options=available_classificacoes_sorted,
-                key="classificacao_filter"
+            selected_expected_names = st.multiselect(
+                "🙍‍♂️ Expected Name:",
+                options=available_expected_names_sorted,
+                default=current_selections,
+                key="expected_name_filter"
             )
         
-        # Second row of filters
-        col4, col5, col6 = st.columns(3)
+        with col3:
+            # CPF filter - get options based on other filters
+            current_df = get_current_filtered_dataset(exclude_filter_key='cpfs')
+            available_cpfs = get_filtered_options(current_df)['cpfs']
+            
+            # Preserve currently selected values
+            current_selections = st.session_state.get('cpf_filter', [])
+            all_options = list(set(available_cpfs + current_selections))
+            available_cpfs_sorted = sorted(all_options, key=lambda x: x.lower())
+            
+            selected_cpfs = st.multiselect(
+                "🔢 CPF:",
+                options=available_cpfs_sorted,
+                default=current_selections,
+                key="cpf_filter"
+            )
+        
+        # === CONTATO ===
+        st.markdown("### 📞 Contato")
+        col4 = st.columns(1)[0]
         
         with col4:
-            # Bairro filter - always show all available bairros
-            available_bairros = get_filtered_options(conversations_df)['bairros']
-            available_bairros_sorted = sorted(available_bairros, key=lambda x: x.lower())
+            # Phone number filter - get options based on other filters
+            current_df = get_current_filtered_dataset(exclude_filter_key='phone_numbers')
+            available_phone_numbers = get_filtered_options(current_df)['phone_numbers']
+            
+            # Preserve currently selected values
+            current_selections = st.session_state.get('phone_filter', [])
+            all_options = list(set(available_phone_numbers + current_selections))
+            available_phone_numbers_sorted = sorted(all_options, key=lambda x: x.lower())
+            
+            selected_phone_numbers = st.multiselect(
+                "📞 Phone Number:",
+                options=available_phone_numbers_sorted,
+                default=current_selections,
+                key="phone_filter"
+            )
+        
+        # === IMÓVEL ===
+        st.markdown("### 🏠 Imóvel")
+        col5, col6, col7 = st.columns(3)
+        
+        with col5:
+            # Bairro filter - get options based on other filters
+            current_df = get_current_filtered_dataset(exclude_filter_key='bairros')
+            available_bairros = get_filtered_options(current_df)['bairros']
+            
+            # Preserve currently selected values
+            current_selections = st.session_state.get('bairro_filter', [])
+            all_options = list(set(available_bairros + current_selections))
+            available_bairros_sorted = sorted(all_options, key=lambda x: x.lower())
             
             selected_bairros = st.multiselect(
-                "Bairro:",
+                "🗺️ Bairro:",
                 options=available_bairros_sorted,
+                default=current_selections,
                 key="bairro_filter"
             )
         
-        with col5:
-            # Status filter - always show all available statuses
-            available_statuses = get_filtered_options(conversations_df)['statuses']
-            available_statuses_sorted = sorted(available_statuses, key=lambda x: x.lower())
-            
-            selected_statuses = st.multiselect(
-                "Status:",
-                options=available_statuses_sorted,
-                key="status_filter"
-            )
-        
         with col6:
-            # Endereco filter - cascade only from bairro selection
-            if selected_bairros:
-                # Filter endereco options based on selected bairros only
-                current_df = conversations_df[conversations_df['endereco_bairro'].isin(selected_bairros)] if 'endereco_bairro' in conversations_df.columns else conversations_df
-                available_enderecos = get_filtered_options(current_df)['enderecos']
-                if DEBUG:
-                    st.sidebar.write(f"Endereco Debug: {len(current_df)} rows after bairro filtering, {len(available_enderecos)} endereco options")
-            else:
-                # Show all endereco options if no bairro is selected
-                available_enderecos = get_filtered_options(conversations_df)['enderecos']
-                if DEBUG:
-                    st.sidebar.write(f"Endereco Debug: No bairro filter, {len(available_enderecos)} endereco options from all data")
+            # Endereco filter - get options based on other filters
+            current_df = get_current_filtered_dataset(exclude_filter_key='enderecos')
+            available_enderecos = get_filtered_options(current_df)['enderecos']
             
-            available_enderecos_sorted = sorted(available_enderecos, key=lambda x: x.lower())
+            # Preserve currently selected values
+            current_selections = st.session_state.get('endereco_filter', [])
+            all_options = list(set(available_enderecos + current_selections))
+            available_enderecos_sorted = sorted(all_options, key=lambda x: x.lower())
             
             selected_enderecos = st.multiselect(
-                "Endereco:",
+                "📍 Endereco:",
                 options=available_enderecos_sorted,
-                key="endereco_filter",
-                help=f"Available options: {len(available_enderecos)}"
+                default=current_selections,
+                key="endereco_filter"
             )
         
-        # Third row of filters
-        col7, col8, col9 = st.columns(3)
-        
         with col7:
-            # Complemento filter - always show all available complementos
-            available_complementos = get_filtered_options(conversations_df)['complementos']
-            available_complementos_sorted = sorted(available_complementos, key=lambda x: x.lower())
+            # Complemento filter - get options based on other filters
+            current_df = get_current_filtered_dataset(exclude_filter_key='complementos')
+            available_complementos = get_filtered_options(current_df)['complementos']
+            
+            # Preserve currently selected values
+            current_selections = st.session_state.get('complemento_filter', [])
+            all_options = list(set(available_complementos + current_selections))
+            available_complementos_sorted = sorted(all_options, key=lambda x: x.lower())
             
             selected_complementos = st.multiselect(
-                "Complemento:",
+                "🚪 Complemento:",
                 options=available_complementos_sorted,
+                default=current_selections,
                 key="complemento_filter"
             )
         
+        # === QUALIFICAÇÃO ===
+        st.markdown("### ✅ Qualificação")
+        col8, col9 = st.columns(2)
+        
         with col8:
+            # Classificação filter - get options based on other filters
+            current_df = get_current_filtered_dataset(exclude_filter_key='classificacoes')
+            available_classificacoes = get_filtered_options(current_df)['classificacoes']
+            
+            # Preserve currently selected values
+            current_selections = st.session_state.get('classificacao_filter', [])
+            all_options = list(set(available_classificacoes + current_selections))
+            available_classificacoes_sorted = sorted(all_options, key=lambda x: x.lower())
+            
+            selected_classificacoes = st.multiselect(
+                "✅ Classificação:",
+                options=available_classificacoes_sorted,
+                default=current_selections,
+                key="classificacao_filter"
+            )
+        
+        with col9:
+            # Status filter - get options based on other filters
+            current_df = get_current_filtered_dataset(exclude_filter_key='statuses')
+            available_statuses = get_filtered_options(current_df)['statuses']
+            
+            # Preserve currently selected values
+            current_selections = st.session_state.get('status_filter', [])
+            all_options = list(set(available_statuses + current_selections))
+            available_statuses_sorted = sorted(all_options, key=lambda x: x.lower())
+            
+            selected_statuses = st.multiselect(
+                "🎯 Status:",
+                options=available_statuses_sorted,
+                default=current_selections,
+                key="status_filter"
+            )
+        
+        # === ACTIONS & METRICS ===
+        st.markdown("### ⚙️ Ações")
+        col10, col11, col12 = st.columns(3)
+        
+        with col10:
             # Clear filters button
             if st.button("🗑️ Clear All Filters", type="secondary"):
                 # Clear all filter widget states
-                for key in ['display_name_filter', 'phone_filter', 'classificacao_filter', 
-                           'bairro_filter', 'status_filter', 'endereco_filter', 'complemento_filter']:
+                for key in ['display_name_filter', 'phone_filter', 'expected_name_filter', 'cpf_filter',
+                           'classificacao_filter', 'bairro_filter', 'status_filter', 'endereco_filter', 'complemento_filter']:
                     if key in st.session_state:
                         del st.session_state[key]
                 st.rerun()
         
-        with col9:
+        with col11:
             # Show active filters count (using the cleaned variable names)
-            all_filters = [selected_display_names, selected_phone_numbers, selected_classificacoes, 
-                          selected_bairros, selected_statuses, selected_enderecos, selected_complementos]
+            all_filters = [selected_display_names, selected_phone_numbers, selected_expected_names, selected_cpfs,
+                          selected_classificacoes, selected_bairros, selected_statuses, selected_enderecos, selected_complementos]
             active_filters = sum(1 for filter_list in all_filters if filter_list)
             if active_filters > 0:
-                st.metric("Active Filters", active_filters)
+                st.metric("🔍 Active Filters", active_filters)
     
     except Exception as e:
         st.error(f"Error in filter setup: {e}")
@@ -405,6 +599,34 @@ try:
         # Apply phone number filter
         if selected_phone_numbers:
             filtered_df = filtered_df[filtered_df['formatted_phone'].isin(selected_phone_numbers)]
+        
+        # Apply expected name filter
+        if selected_expected_names:
+            # Check both 'Nome' and 'expected_name' columns
+            if 'Nome' in filtered_df.columns:
+                filtered_df = filtered_df[filtered_df['Nome'].isin(selected_expected_names)]
+            elif 'expected_name' in filtered_df.columns:
+                filtered_df = filtered_df[filtered_df['expected_name'].isin(selected_expected_names)]
+        
+        # Apply CPF filter
+        if selected_cpfs:
+            # Look for CPF in various columns and match formatted values
+            cpf_matched = False
+            for col in ['CPF', 'cpf', 'documento', 'Documento']:
+                if col in filtered_df.columns and not cpf_matched:
+                    # Create formatted CPF column for matching
+                    def format_cpf_for_match(cpf_val):
+                        if pd.isna(cpf_val):
+                            return ""
+                        clean_cpf = ''.join(filter(str.isdigit, str(cpf_val)))
+                        if len(clean_cpf) == 11:
+                            return f"{clean_cpf[:3]}.{clean_cpf[3:6]}.{clean_cpf[6:9]}-{clean_cpf[9:]}"
+                        return ""
+                    
+                    filtered_df['temp_formatted_cpf'] = filtered_df[col].apply(format_cpf_for_match)
+                    filtered_df = filtered_df[filtered_df['temp_formatted_cpf'].isin(selected_cpfs)]
+                    filtered_df = filtered_df.drop('temp_formatted_cpf', axis=1)
+                    cpf_matched = True
         
         # Apply bairro filter
         if selected_bairros and 'endereco_bairro' in filtered_df.columns:
@@ -454,6 +676,13 @@ try:
         elif 'expected_name' in filtered_df.columns:
             display_columns.insert(1, 'expected_name')
             display_column_names.insert(1, 'Expected Name')
+        
+        # Add CPF column if available
+        for cpf_col in ['CPF', 'cpf', 'documento', 'Documento']:
+            if cpf_col in filtered_df.columns:
+                display_columns.insert(-1, cpf_col)  # Insert before the last column (Messages)
+                display_column_names.insert(-1, 'CPF')
+                break
         
         # Add sheets data columns if they exist
         if 'endereco_bairro' in filtered_df.columns:

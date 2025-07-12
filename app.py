@@ -7,13 +7,23 @@ import streamlit as st
 
 from loaders.db_loader import get_dataframe
 from utils.ui_helpers import parse_imoveis
+from services.preloader import start_background_preload, display_preloader_status
 
 # ─── PAGE CONFIG ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="Home Dashboard", layout="wide")
 st.title("🏠 Home Dashboard")
 
+# ─── START BACKGROUND PRELOADER ─────────────────────────────────────────────
+# Start background downloading of all critical files for smooth UX
+if "preloader_started" not in st.session_state:
+    st.session_state.preloader_started = True
+    start_background_preload()
+
 # Debug mode check
 DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
+
+# Display preloader status in sidebar
+display_preloader_status()
 
 
 # ─── LOAD & CACHE DATA ────────────────────────────────────────────────────

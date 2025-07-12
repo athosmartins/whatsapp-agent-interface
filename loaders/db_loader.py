@@ -9,6 +9,84 @@ TABLE            = "deepseek_results"                    # what the UI expects
 _last_db_info = None
 
 def _download_from_drive(dest: str):
+    """Download only the newest database file from Google Drive using Google Drive API."""
+    try:
+        import json
+        import io
+        from google.oauth2.service_account import Credentials
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaIoBaseDownload
+        
+        # Load credentials from credentials.json file
+        CREDENTIALS_FILE = "credentials.json"
+        if not os.path.exists(CREDENTIALS_FILE):
+            print(f"Error: {CREDENTIALS_FILE} not found. Falling back to gdown.")
+            _download_from_drive_fallback(dest)
+            return
+        
+        # Google API scopes
+        SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+        
+        # Load credentials
+        with open(CREDENTIALS_FILE, 'r') as f:
+            credentials_info = json.load(f)
+        
+        credentials = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
+        drive_service = build('drive', 'v3', credentials=credentials)
+        
+        print("Finding newest database file on Google Drive...")
+        
+        # List files in the folder, ordered by creation time (newest first)
+        folder_id = "1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw"
+        query = f"'{folder_id}' in parents and trashed=false and name contains '.db'"
+        results = drive_service.files().list(
+            q=query,
+            orderBy='createdTime desc',
+            fields='files(id, name, createdTime)',
+            pageSize=10  # Only get top 10 files
+        ).execute()
+        
+        files = results.get('files', [])
+        if not files:
+            print("No database files found in Google Drive folder")
+            _download_from_drive_fallback(dest)
+            return
+        
+        # Get the newest file (first in the list due to orderBy='createdTime desc')
+        newest_file = files[0]
+        file_id = newest_file['id']
+        file_name = newest_file['name']
+        
+        print(f"Downloading newest file: {file_name} (created: {newest_file['createdTime']})")
+        
+        # Download only this specific file
+        request = drive_service.files().get_media(fileId=file_id)
+        
+        # Download with progress tracking
+        with open(dest, 'wb') as local_file:
+            downloader = MediaIoBaseDownload(local_file, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+                if status:
+                    print(f"Download progress: {int(status.progress() * 100)}%")
+        
+        print(f"Successfully downloaded: {file_name}")
+        
+        # Store original filename and modification time for debug info
+        global _last_db_info
+        _last_db_info = {
+            'original_filename': file_name,
+            'last_modified': os.path.getmtime(dest)
+        }
+        
+    except Exception as e:
+        print(f"Error downloading with Google Drive API: {e}")
+        print("Falling back to gdown method...")
+        _download_from_drive_fallback(dest)
+
+def _download_from_drive_fallback(dest: str):
+    """Fallback method using gdown (downloads entire folder)."""
     import gdown, pathlib, shutil, os, tempfile
 
     tmp_dir = tempfile.mkdtemp()
@@ -39,7 +117,7 @@ def _ensure_db() -> str:
     • If file is older than 1 hour ⇒ fetch from Drive
     """
     # On Streamlit Cloud write to /tmp; locally write beside the script
-    path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
+    path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREAMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
     
     # Check if file exists and its age
     if os.path.isfile(path):

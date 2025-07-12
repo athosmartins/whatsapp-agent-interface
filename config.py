@@ -37,6 +37,7 @@ ACOES_OPTS = [
     "Falha ao entrar em contato",
     "Falha ao entrar em contato com vizinho",
     "Em estudo",
+    "Não faz sentido mandar",
 ]
 
 PAGAMENTO_OPTS = [
