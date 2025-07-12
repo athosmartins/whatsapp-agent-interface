@@ -412,11 +412,31 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
                     all_columns.update(prop.keys())
                 
                 # Filter out technical columns and sort alphabetically
-                excluded_columns = {'GEOMETRY', 'geometry', 'id', 'ID', '_id'}
-                available_columns = ['Índice Sequencial'] + sorted([
-                    col for col in all_columns 
-                    if col not in excluded_columns and col.strip()  # Exclude empty/whitespace columns
-                ])
+                excluded_columns = {'GEOMETRY', 'geometry', 'id', 'ID', '_id', '_conversation_id'}
+                
+                # Separate conversation columns for better organization
+                conversation_columns = []
+                property_columns = []
+                
+                for col in all_columns:
+                    if col not in excluded_columns and col.strip():
+                        if col.startswith('_conversation_'):
+                            # Make conversation columns more user-friendly
+                            if col == '_conversation_display_name':
+                                conversation_columns.append('👤 Nome do Contato')
+                            elif col == '_conversation_phone':
+                                conversation_columns.append('📞 Telefone do Contato')
+                        else:
+                            property_columns.append(col)
+                
+                # Combine all columns with conversation columns first (if any)
+                available_columns = ['Índice Sequencial'] + sorted(conversation_columns) + sorted(property_columns)
+                
+                # Create mapping for display names back to actual column names
+                column_name_mapping = {
+                    '👤 Nome do Contato': '_conversation_display_name',
+                    '📞 Telefone do Contato': '_conversation_phone'
+                }
                 
                 color_by_column = st.selectbox(
                     "🎨 Colorir por:",
@@ -427,8 +447,10 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
                 
                 # Show unique values count for selected column
                 if color_by_column != "Índice Sequencial":
+                    # Get actual column name (handle conversation column mapping)
+                    actual_column = column_name_mapping.get(color_by_column, color_by_column)
                     unique_count = len(set(
-                        str(prop.get(color_by_column, 'N/A')).strip() or 'N/A'
+                        str(prop.get(actual_column, 'N/A')).strip() or 'N/A'
                         for prop in properties_with_geometry
                     ))
                     st.caption(f"📊 {unique_count} valores únicos em '{color_by_column}'")
@@ -449,6 +471,7 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
             show_tooltips = True
             show_property_info = True
             color_by_column = "Índice Sequencial"
+            column_name_mapping = {}
         
         # Re-create map with updated options
         m = folium.Map(
@@ -479,9 +502,12 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
                 color_mapping[i] = colors[i % len(colors)]
         else:
             # Use column values for colors - handle different data types
+            # Get actual column name (handle conversation column mapping)
+            actual_column = column_name_mapping.get(color_by_column, color_by_column)
+            
             raw_values = []
             for prop in properties_with_geometry:
-                raw_value = prop.get(color_by_column, 'N/A')
+                raw_value = prop.get(actual_column, 'N/A')
                 
                 # Handle different data types
                 if pd.isna(raw_value) or raw_value is None:
@@ -517,6 +543,18 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
             area_construcao = prop.get('AREA CONSTRUCAO', 'N/A')
             valor_net = prop.get('NET VALOR', 'N/A')
             
+            # Debug tooltip data for first property
+            if i == 0:
+                print(f"🔍 Debug first property tooltip data:")
+                print(f"   - endereco: '{endereco}' (type: {type(endereco)})")
+                print(f"   - bairro: '{bairro}' (type: {type(bairro)})")
+                print(f"   - show_tooltips: {show_tooltips}")
+            
+            # Check if this is from conversations view (has conversation context)
+            conversation_name = prop.get('_conversation_display_name')
+            conversation_phone = prop.get('_conversation_phone')
+            conversation_id = prop.get('_conversation_id')
+            
             # Format value
             if isinstance(valor_net, (int, float)) and pd.notna(valor_net):
                 valor_formatado = f"R$ {valor_net:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
@@ -525,22 +563,38 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
             
             # Create popup content based on options
             if show_property_info:
+                # Add conversation info if available (from conversations view)
+                conversation_info = ""
+                if conversation_name:
+                    conversation_info = f"""
+                    <hr style="margin: 10px 0;">
+                    <p><strong>👤 Contato:</strong> {conversation_name}</p>
+                    <p><strong>📞 Telefone:</strong> {conversation_phone}</p>
+                    """
+                
                 popup_html = f"""
-                <div style="width: 280px;">
-                    <h4>{endereco}</h4>
-                    <p><strong>Bairro:</strong> {bairro}</p>
-                    <p><strong>Índice:</strong> {indice}</p>
-                    <p><strong>Tipo:</strong> {tipo}</p>
-                    <p><strong>Área Terreno:</strong> {area_terreno} m²</p>
-                    <p><strong>Área Construção:</strong> {area_construcao} m²</p>
-                    <p><strong>Valor NET:</strong> {valor_formatado}</p>
+                <div style="width: 300px;">
+                    <h4>🏠 {endereco}</h4>
+                    <p><strong>📍 Bairro:</strong> {bairro}</p>
+                    <p><strong>🔢 Índice:</strong> {indice}</p>
+                    <p><strong>🏗️ Tipo:</strong> {tipo}</p>
+                    <p><strong>📐 Área Terreno:</strong> {area_terreno} m²</p>
+                    <p><strong>🏢 Área Construção:</strong> {area_construcao} m²</p>
+                    <p><strong>💰 Valor NET:</strong> {valor_formatado}</p>
+                    {conversation_info}
                 </div>
                 """
             else:
+                # Simple popup with conversation info if available
+                conversation_info = ""
+                if conversation_name:
+                    conversation_info = f"<p><strong>👤</strong> {conversation_name}</p>"
+                
                 popup_html = f"""
-                <div style="width: 200px;">
-                    <h4>{endereco}</h4>
-                    <p><strong>Bairro:</strong> {bairro}</p>
+                <div style="width: 220px;">
+                    <h4>🏠 {endereco}</h4>
+                    <p><strong>📍</strong> {bairro}</p>
+                    {conversation_info}
                 </div>
                 """
             
@@ -551,21 +605,45 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
             if color_by_column == "Índice Sequencial":
                 color = color_mapping[i]
             else:
-                column_value = str(prop.get(color_by_column, 'N/A'))
+                # Get actual column name (handle conversation column mapping)
+                actual_column = column_name_mapping.get(color_by_column, color_by_column)
+                raw_value = prop.get(actual_column, 'N/A')
+                
+                # Clean the value (same logic as in color mapping)
+                if pd.isna(raw_value) or raw_value is None:
+                    column_value = 'N/A'
+                elif isinstance(raw_value, (int, float)):
+                    column_value = str(raw_value)
+                else:
+                    column_value = str(raw_value).strip()
+                    if not column_value:
+                        column_value = 'N/A'
+                        
                 color = color_mapping.get(column_value, 'gray')
             
             for polygon in polygons:
                 if polygon:
                     # Add polygon to map if enabled
                     if show_polygons:
-                        folium.Polygon(
+                        # Create safe tooltip text for polygon
+                        tooltip_endereco = str(endereco).strip() if endereco and str(endereco).strip() != 'N/A' else 'Endereço não disponível'
+                        tooltip_bairro = str(bairro).strip() if bairro and str(bairro).strip() != 'N/A' else 'Bairro não disponível'
+                        tooltip_text = f"{tooltip_endereco}, {tooltip_bairro}"
+                        
+                        polygon_obj = folium.Polygon(
                             locations=polygon,
                             color=color,
                             weight=polygon_weight,
                             fillColor=color,
                             fillOpacity=polygon_opacity,
                             popup=folium.Popup(popup_html, max_width=300)
-                        ).add_to(m)
+                        )
+                        
+                        # Add tooltip to polygon if enabled and valid
+                        if show_tooltips and tooltip_text and len(tooltip_text.strip()) > 3:
+                            polygon_obj.add_child(folium.Tooltip(tooltip_text, permanent=False))
+                        
+                        polygon_obj.add_to(m)
                     
                     # Add marker at center if enabled
                     if show_markers:
@@ -580,7 +658,14 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
                             
                             # Add tooltip if enabled
                             if show_tooltips:
-                                marker.add_child(folium.Tooltip(f"{endereco}, {bairro}"))
+                                # Create safe tooltip text
+                                tooltip_endereco = str(endereco).strip() if endereco and str(endereco).strip() != 'N/A' else 'Endereço não disponível'
+                                tooltip_bairro = str(bairro).strip() if bairro and str(bairro).strip() != 'N/A' else 'Bairro não disponível'
+                                tooltip_text = f"{tooltip_endereco}, {tooltip_bairro}"
+                                
+                                # Ensure tooltip text is not empty and has valid characters
+                                if tooltip_text and len(tooltip_text.strip()) > 3:
+                                    marker.add_child(folium.Tooltip(tooltip_text, permanent=False))
                             
                             marker.add_to(marker_cluster)
         
