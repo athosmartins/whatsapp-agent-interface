@@ -119,6 +119,8 @@ def get_polygon_center(polygon_coords: List[List[float]]) -> Optional[List[float
         return None
 
 
+
+
 def create_property_map(properties: List[Dict[str, Any]]) -> str:
     """
     Create an interactive map showing all properties for a person.
@@ -160,13 +162,13 @@ def create_property_map(properties: List[Dict[str, Any]]) -> str:
         if not all_centers:
             # Default to Belo Horizonte center if no valid coordinates
             map_center = [-19.9167, -43.9345]
-            zoom_start = 10
+            zoom_start = 16
         else:
             # Calculate overall center
             center_lat = sum(center[0] for center in all_centers) / len(all_centers)
             center_lon = sum(center[1] for center in all_centers) / len(all_centers)
             map_center = [center_lat, center_lon]
-            zoom_start = 12
+            zoom_start = 16
 
         # Create map
         m = folium.Map(
@@ -336,41 +338,13 @@ def render_property_map_streamlit(
         if not all_centers:
             # Default to Belo Horizonte center if no valid coordinates
             map_center = [-19.9167, -43.9345]
-            zoom_start = 10
+            zoom_start = 16
         else:
-            # Calculate overall center and optimal zoom level
+            # Calculate overall center
             center_lat = sum(center[0] for center in all_centers) / len(all_centers)
             center_lon = sum(center[1] for center in all_centers) / len(all_centers)
             map_center = [center_lat, center_lon]
-
-            # Calculate bounding box to determine optimal zoom
-            min_lat = min(center[0] for center in all_centers)
-            max_lat = max(center[0] for center in all_centers)
-            min_lon = min(center[1] for center in all_centers)
-            max_lon = max(center[1] for center in all_centers)
-
-            # Calculate distance spans
-            lat_span = max_lat - min_lat
-            lon_span = max_lon - min_lon
-            max_span = max(lat_span, lon_span)
-
-            # Calculate optimal zoom based on span (more properties = zoom out more)
-            if max_span == 0:
-                zoom_start = 16  # Single point
-            elif max_span < 0.001:
-                zoom_start = 15  # Very close properties
-            elif max_span < 0.005:
-                zoom_start = 14  # Close properties
-            elif max_span < 0.01:
-                zoom_start = 13  # Nearby properties
-            elif max_span < 0.05:
-                zoom_start = 12  # Same neighborhood
-            elif max_span < 0.1:
-                zoom_start = 11  # Same area
-            elif max_span < 0.2:
-                zoom_start = 10  # Same city area
-            else:
-                zoom_start = 9  # Wide area
+            zoom_start = 16
 
         # Map style configurations
         map_styles = {
@@ -876,7 +850,22 @@ def render_property_map_streamlit(
 
         # Render map in Streamlit with full width and increased height
         # (50% more than 400 = 600)
-        st_folium.st_folium(m, use_container_width=True, height=1000)
+        map_data = st_folium.st_folium(m, use_container_width=True, height=1000)
+        
+        # Debug: Show current map state
+        if st.session_state.get('debug_mode', False):
+            if map_data and 'zoom' in map_data:
+                st.write(f"🔍 Current Map Zoom Level: **{map_data['zoom']}**")
+            if map_data and 'center' in map_data:
+                center = map_data['center']
+                st.write(f"📍 Current Map Center: **[{center['lat']:.6f}, {center['lng']:.6f}]**")
+            if map_data and 'bounds' in map_data:
+                bounds = map_data['bounds']
+                st.write(f"📐 Current Map Bounds:")
+                st.write(f"   - North: {bounds['_northEast']['lat']:.6f}")
+                st.write(f"   - South: {bounds['_southWest']['lat']:.6f}")
+                st.write(f"   - East: {bounds['_northEast']['lng']:.6f}")
+                st.write(f"   - West: {bounds['_southWest']['lng']:.6f}")
 
         # Advanced options button below the map
         if advanced_options_enabled:

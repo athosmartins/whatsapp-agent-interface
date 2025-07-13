@@ -16,3 +16,13 @@ test.py
 
 # Temporary analysis files
 analysis_temp/
+
+# Security - API Keys and Secrets
+.secrets.toml
+secrets.toml
+*.key
+*.pem
+.env.local
+.env.production
+voxuy_token.txt
+api_keys.txt

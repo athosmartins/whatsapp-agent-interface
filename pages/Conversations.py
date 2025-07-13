@@ -333,6 +333,12 @@ def show_filtered_conversations_map(filtered_df):
                 st.write(
                     f"   {i+1}. {prop.get('ENDERECO', 'N/A')} - Geometry: {len(str(prop.get('GEOMETRY', '')))}"
                 )
+            
+            # Debug map settings
+            st.write("🗺️ Map Debug Info:")
+            st.write(f"   - Default Zoom Level: 16")
+            st.write(f"   - Total Properties: {len(all_properties)}")
+            st.write(f"   - Properties with Geometry: {len([p for p in all_properties if p.get('GEOMETRY')])}")
 
         # Add a container to isolate the map rendering
         map_container = st.container()
@@ -1392,6 +1398,8 @@ try:
 
             # Show map if loaded
             if st.session_state.get(f"map_loaded_{len(filtered_df)}", False):
+                # Pass debug mode to session state for map debugging
+                st.session_state.debug_mode = DEBUG
                 show_filtered_conversations_map(filtered_df)
 
 except Exception as e:

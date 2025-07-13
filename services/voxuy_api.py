@@ -2,10 +2,42 @@
 
 import requests
 import json
+import os
+import streamlit as st
 from typing import Dict, Any
 
-# Voxuy API configuration
-VOXUY_API_TOKEN = "68a1c480-bbcc-47d4-9b6f-f9cd7be56aef"
+# Voxuy API configuration - Load from environment variables or Streamlit secrets
+def get_voxuy_api_token():
+    """Get Voxuy API token from environment variables or Streamlit secrets."""
+    # Try environment variable first
+    token = os.getenv('VOXUY_API_TOKEN')
+    if token:
+        return token
+    
+    # Try loading directly from .streamlit/secrets.toml for non-Streamlit contexts
+    try:
+        import toml
+        secrets_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.streamlit', 'secrets.toml')
+        if os.path.exists(secrets_path):
+            with open(secrets_path, 'r') as f:
+                secrets = toml.load(f)
+                if 'voxuy' in secrets and 'api_token' in secrets['voxuy']:
+                    return secrets['voxuy']['api_token']
+    except Exception as e:
+        print(f"Could not load from secrets.toml: {e}")
+    
+    # Try Streamlit secrets (when running in Streamlit context)
+    try:
+        if hasattr(st, 'secrets') and 'voxuy' in st.secrets:
+            return st.secrets['voxuy']['api_token']
+    except Exception:
+        pass
+    
+    # Final fallback - this should be removed after setting up proper secrets
+    print("⚠️ WARNING: Using hardcoded API token. Please set VOXUY_API_TOKEN environment variable or Streamlit secrets.")
+    return "68a1c480-bbcc-47d4-9b6f-f9cd7be56aef"
+
+VOXUY_API_TOKEN = get_voxuy_api_token()
 VOXUY_CUSTOM_MESSAGE_ID = "48800cc8-e0fb-41ff-bfdd-a8b1fe"
 VOXUY_WEBHOOK_URL = "https://sistema.voxuy.com/api/65294302-8497-476a-872e-1d1b778aede1/webhooks/voxuy/transaction"
 
