@@ -574,13 +574,33 @@ def initialize_session_state():
         st.info("📝 Processing conversation from Conversations page")
 
     else:
-        # Normal initialization - load from deepseek_results
-        if "master_df" not in st.session_state:
-            st.session_state.master_df = load_data()
+        # Normal initialization - load from deepseek_results with error handling
+        try:
+            if "master_df" not in st.session_state:
+                st.session_state.master_df = load_data()
 
-        # Initialize original_db_data (store the original database values)
-        if "original_db_data" not in st.session_state:
-            st.session_state.original_db_data = load_data()
+            # Initialize original_db_data (store the original database values)
+            if "original_db_data" not in st.session_state:
+                st.session_state.original_db_data = load_data()
+        except Exception as e:
+            st.error(f"🚨 **PRODUCTION ERROR - Data Loading Failed**")
+            st.error(f"**Error:** {str(e)}")
+            
+            with st.expander("🔍 Debug Information", expanded=False):
+                st.write(f"**Error type:** {type(e).__name__}")
+                st.write(f"**Error message:** {str(e)}")
+                st.write(f"**Session state keys:** {list(st.session_state.keys())}")
+                
+                if DEBUG:
+                    st.exception(e)
+            
+            st.write("**Possible Causes:**")
+            st.write("• Database connection issues")
+            st.write("• Missing Google Drive credentials")
+            st.write("• Network connectivity problems")
+            st.write("• Database file corruption")
+            
+            st.stop()
 
     # Initialize original_values storage
     if "original_values" not in st.session_state:
@@ -790,24 +810,63 @@ initialize_session_state()
 # Work with master_df
 df = st.session_state.master_df
 
-# ─── AUTO-LOADING CONVERSATION ───────────────────────────────────────────
+# ─── AUTO-LOADING CONVERSATION WITH ERROR HANDLING ───────────────────────
 # If auto_load_conversation is specified, find and load that conversation
 if auto_load_conversation:
-    # Search for the conversation by conversation_id or whatsapp_number
-    if "conversation_id" in df.columns:
-        matching_conversations = df[df["conversation_id"] == auto_load_conversation]
-    else:
-        matching_conversations = df[df["whatsapp_number"] == auto_load_conversation]
+    try:
+        # Search for the conversation by conversation_id or whatsapp_number
+        if "conversation_id" in df.columns:
+            matching_conversations = df[df["conversation_id"] == auto_load_conversation]
+        else:
+            matching_conversations = df[df["whatsapp_number"] == auto_load_conversation]
 
-    if not matching_conversations.empty:
-        # Found the conversation, set idx to its position
-        conversation_idx = matching_conversations.index[0]
-        st.session_state.idx = conversation_idx
-        st.success(f"✅ Successfully loaded conversation: {auto_load_conversation}")
-    else:
-        st.warning(
-            f"⚠️ Conversation {auto_load_conversation} not found in current dataset"
-        )
+        if not matching_conversations.empty:
+            # Found the conversation, set idx to its position
+            conversation_idx = matching_conversations.index[0]
+            st.session_state.idx = conversation_idx
+            st.success(f"✅ Successfully loaded conversation: {auto_load_conversation}")
+        else:
+            st.warning(
+                f"⚠️ Conversation {auto_load_conversation} not found in current dataset"
+            )
+            
+            # Show debug info for missing conversation
+            with st.expander("🔍 Debug: Why conversation not found?", expanded=False):
+                st.write(f"**Looking for:** {auto_load_conversation}")
+                st.write(f"**DataFrame shape:** {df.shape}")
+                st.write(f"**Available columns:** {list(df.columns)}")
+                
+                if 'whatsapp_number' in df.columns:
+                    unique_numbers = df['whatsapp_number'].unique()
+                    st.write(f"**Total unique phone numbers:** {len(unique_numbers)}")
+                    st.write(f"**Sample phone numbers:** {unique_numbers[:10].tolist()}")
+                    
+                    # Check if it's a partial match issue
+                    partial_matches = df[df['whatsapp_number'].str.contains(auto_load_conversation[-8:], na=False)]
+                    if not partial_matches.empty:
+                        st.write(f"**Partial matches found:** {len(partial_matches)}")
+                        st.write(f"**Partial matches:** {partial_matches['whatsapp_number'].tolist()}")
+                        
+    except Exception as e:
+        st.error(f"🚨 **Error loading conversation {auto_load_conversation}**")
+        st.error(f"**Error:** {str(e)}")
+        
+        with st.expander("🔍 Conversation Loading Error Details", expanded=True):
+            st.write(f"**Target conversation:** {auto_load_conversation}")
+            st.write(f"**Error type:** {type(e).__name__}")
+            
+            if 'df' in locals():
+                st.write(f"**DataFrame loaded:** Yes, shape: {df.shape}")
+                st.write(f"**DataFrame columns:** {list(df.columns)}")
+            else:
+                st.write("**DataFrame loaded:** No")
+                
+            if DEBUG:
+                st.exception(e)
+                
+        # Don't stop the app, just use default index
+        if "idx" not in st.session_state:
+            st.session_state.idx = 0
 
 # Ensure idx is within bounds
 st.session_state.idx = min(st.session_state.idx, len(df) - 1)
