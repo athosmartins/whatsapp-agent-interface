@@ -33,9 +33,9 @@ def get_voxuy_api_token():
     except Exception:
         pass
     
-    # Final fallback - this should be removed after setting up proper secrets
-    print("⚠️ WARNING: Using hardcoded API token. Please set VOXUY_API_TOKEN environment variable or Streamlit secrets.")
-    return "68a1c480-bbcc-47d4-9b6f-f9cd7be56aef"
+    # Final fallback - no secrets configured
+    print("❌ ERROR: No Voxuy API token found! Please set VOXUY_API_TOKEN environment variable or configure Streamlit secrets.")
+    raise Exception("Voxuy API token not configured. Please set VOXUY_API_TOKEN environment variable or add token to .streamlit/secrets.toml")
 
 VOXUY_API_TOKEN = get_voxuy_api_token()
 VOXUY_CUSTOM_MESSAGE_ID = "48800cc8-e0fb-41ff-bfdd-a8b1fe"
