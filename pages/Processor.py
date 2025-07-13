@@ -35,6 +35,14 @@ from utils.ui_helpers import (
     parse_familiares_grouped,
     parse_imoveis,
 )
+from utils.sync_ui import (
+    setup_conversation_sync,
+    render_sync_sidebar,
+    render_sync_header,
+    check_for_sync_updates,
+    cleanup_sync_on_exit,
+    setup_auto_refresh,
+)
 
 
 def format_last_message_date(timestamp):
@@ -911,6 +919,12 @@ st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
 # ─── NAVIGATION TOP ─────────────────────────────────────────────────────────
 def goto_prev():
     """Go to the previous conversation."""
+    # Cleanup sync for current conversation
+    current_row = df.iloc[st.session_state.idx]
+    current_conversation_id = current_row.get("conversation_id", current_row.get("whatsapp_number", ""))
+    if current_conversation_id:
+        cleanup_sync_on_exit(current_conversation_id)
+    
     st.session_state.idx = max(st.session_state.idx - 1, 0)
     # Update URL with conversation_id
     new_idx = st.session_state.idx
@@ -924,6 +938,12 @@ def goto_prev():
 
 def goto_next():
     """Go to the next conversation."""
+    # Cleanup sync for current conversation
+    current_row = df.iloc[st.session_state.idx]
+    current_conversation_id = current_row.get("conversation_id", current_row.get("whatsapp_number", ""))
+    if current_conversation_id:
+        cleanup_sync_on_exit(current_conversation_id)
+    
     st.session_state.idx = min(st.session_state.idx + 1, len(df) - 1)
     # Update URL with conversation_id
     new_idx = st.session_state.idx
@@ -952,6 +972,36 @@ with nav_next_col:
         on_click=goto_next,
         use_container_width=True,
     )
+
+# ─── SYNC INITIALIZATION ────────────────────────────────────────────────────
+# Initialize auto-sync for the current conversation
+conversation_id = row.get("conversation_id", row.get("whatsapp_number", ""))
+
+# Debug conversation ID
+if DEBUG:
+    st.write(f"🔍 **Sync Debug:** conversation_id = {conversation_id}")
+    st.write(f"🔍 **Row keys:** {list(row.keys()) if hasattr(row, 'keys') else 'No keys'}")
+
+if conversation_id:
+    # Setup auto-sync
+    setup_conversation_sync(conversation_id)
+    
+    # Check for sync updates and refresh if needed
+    if check_for_sync_updates(conversation_id):
+        st.rerun()
+    
+    # Setup auto-refresh mechanism
+    setup_auto_refresh()
+    
+    # Render sync header
+    render_sync_header(conversation_id)
+    
+    # Render sync sidebar controls
+    render_sync_sidebar(conversation_id)
+else:
+    if DEBUG:
+        st.error("🚨 **Sync Error:** No conversation_id found!")
+        st.write(f"Row content: {dict(row) if hasattr(row, 'keys') else str(row)}")
 
 # ─── MAIN CONTENT LAYOUT ────────────────────────────────────────────────────
 left_col, right_col = st.columns([1, 1])
@@ -1495,13 +1545,35 @@ with left_col:
 
 with right_col:
     # ─── CHAT HISTORY ───────────────────────────────────────────────────────────
-    # st.subheader("💬 Histórico da Conversa")
-
     # Parse the conversation history and display in WhatsApp style
     try:
         # First try to load messages from database if we have a conversation_id
         messages = []
         conversation_id = row.get("conversation_id")
+        
+        # Conversation header with sync status
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.subheader("💬 Histórico da Conversa")
+        with col2:
+            # Show sync status if available
+            if conversation_id:
+                from services.conversation_sync import get_sync_status
+                sync_status = get_sync_status(conversation_id)
+                if sync_status.get("active", False):
+                    next_sync = sync_status.get("next_sync_in", 0)
+                    if next_sync > 0:
+                        st.caption(f"🔄 Sync in {int(next_sync)}s")
+                    else:
+                        st.caption("🔄 Syncing...")
+                else:
+                    st.caption("⏸️ Sync off")
+        
+        # Create cache key for this conversation
+        cache_key = f"messages_{conversation_id}_{idx}"
+        
+        # Check if conversation data was cleared by sync (force reload)
+        force_reload = 'conversation_data' not in st.session_state
         
         # Enhanced debug for production crash debugging
         if DEBUG or True:  # Always enable for production debugging
@@ -2627,60 +2699,12 @@ def show_property_map():
             st.dataframe(properties_df, hide_index=True, use_container_width=True)
 
 
-# Show property map if we have properties
-show_property_map()
+    # Show property map if we have properties
+    show_property_map()
 
     # ─── FOOTER CAPTION ─────────────────────────────────────────────────────────
     st.caption(
         f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}"
     )
 
-except Exception as critical_error:
-    # CRITICAL ERROR HANDLER - Prevents 503 errors in production
-    st.error("🚨 **CRITICAL SYSTEM ERROR DETECTED**")
-    st.error("The application encountered a critical error but has been prevented from crashing.")
-    
-    st.error(f"**Error Type:** {type(critical_error).__name__}")
-    st.error(f"**Error Message:** {str(critical_error)}")
-    
-    # Show conversation info if available
-    if 'auto_load_conversation' in locals() and auto_load_conversation:
-        st.error(f"**Target Conversation:** {auto_load_conversation}")
-    
-    # Show basic debugging info
-    with st.expander("🔍 Critical Error Debug Information", expanded=True):
-        st.write("**System State:**")
-        if 'df' in locals():
-            st.write(f"- DataFrame loaded: Yes, shape: {df.shape}")
-        else:
-            st.write("- DataFrame loaded: No")
-            
-        if 'idx' in locals():
-            st.write(f"- Current index: {idx}")
-        else:
-            st.write("- Current index: Not set")
-            
-        if 'row' in locals():
-            st.write(f"- Current row loaded: Yes")
-            st.write(f"- Phone number: {row.get('whatsapp_number', 'N/A')}")
-            st.write(f"- Display name: {row.get('display_name', 'N/A')}")
-        else:
-            st.write("- Current row loaded: No")
-            
-        # Show session state keys
-        st.write(f"- Session state keys: {list(st.session_state.keys())}")
-        
-        # Show full traceback in debug mode
-        if DEBUG:
-            st.write("**Full Traceback:**")
-            st.exception(critical_error)
-    
-    # Provide user guidance
-    st.info("**What you can do:**")
-    st.info("• Try refreshing the page")
-    st.info("• Go back to the main dashboard and try a different conversation")
-    st.info("• Contact support if this error persists")
-    
-    # Add navigation back to dashboard
-    if st.button("🏠 Return to Dashboard"):
-        st.switch_page("app.py")
+# Error handling removed for now - will be added back with proper try/except structure if needed
