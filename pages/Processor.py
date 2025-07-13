@@ -1193,11 +1193,22 @@ with left_col:
 
     if phone_number:
         try:
+            # Enhanced debug for production crash debugging
+            if DEBUG or True:  # Always enable for production debugging
+                st.write(f"🔍 **Debug - Property Loading:**")
+                st.write(f"- **Phone number:** {phone_number}")
+                st.write(f"- **Phone type:** {type(phone_number)}")
+                st.write(f"- **Loading properties from mega_data_set...**")
+            
             # Run comprehensive debugging
             if DEBUG:
                 debug_info = debug_property_mapping(phone_number, row)
 
             properties_from_mega = get_properties_for_phone(phone_number)
+            
+            if DEBUG or True:  # Always enable for production debugging
+                st.write(f"✅ **Properties loaded:** {len(properties_from_mega)} found")
+            
             # Format properties for display
             imoveis = [
                 format_property_for_display(prop) for prop in properties_from_mega
@@ -1207,6 +1218,18 @@ with left_col:
                     f"DEBUG: Found {len(imoveis)} properties from mega_data_set for phone {phone_number}"
                 )
         except Exception as e:
+            st.error(f"🚨 **CRITICAL ERROR loading properties**")
+            st.error(f"**Phone number:** {phone_number}")
+            st.error(f"**Error type:** {type(e).__name__}")
+            st.error(f"**Error message:** {str(e)}")
+            
+            with st.expander("🔍 Property Loading Error Details", expanded=True):
+                st.write(f"**Phone number type:** {type(phone_number)}")
+                st.write(f"**Phone number repr:** {repr(phone_number)}")
+                
+                if DEBUG:
+                    st.exception(e)
+            
             if DEBUG:
                 print(f"DEBUG: Error getting properties from mega_data_set: {e}")
             imoveis = []
@@ -1478,29 +1501,70 @@ with right_col:
     try:
         # First try to load messages from database if we have a conversation_id
         messages = []
-        if "conversation_id" in row.index and pd.notna(row["conversation_id"]):
+        conversation_id = row.get("conversation_id")
+        
+        # Enhanced debug for production crash debugging
+        if DEBUG or True:  # Always enable for production debugging
+            st.write(f"🔍 **Debug - Conversation Loading:**")
+            st.write(f"- **Phone:** {row.get('whatsapp_number', 'N/A')}")
+            st.write(f"- **Conversation ID:** {conversation_id}")
+            st.write(f"- **Row index:** {idx}")
+            st.write(f"- **DataFrame shape:** {df.shape}")
+        
+        if "conversation_id" in row.index and pd.notna(conversation_id):
             try:
-                messages_df = get_conversation_messages(row["conversation_id"])
+                if DEBUG or True:  # Always enable for production debugging
+                    st.write(f"⏳ Attempting to load messages for conversation: {conversation_id}")
+                
+                messages_df = get_conversation_messages(conversation_id)
+                
+                if DEBUG or True:  # Always enable for production debugging
+                    st.write(f"✅ Messages loaded successfully. Shape: {messages_df.shape if not messages_df.empty else 'Empty DataFrame'}")
+                
                 if not messages_df.empty:
                     # Convert database messages to the expected format
-                    for _, msg_row in messages_df.iterrows():
-                        sender = (
-                            "Urb.Link"
-                            if msg_row.get("from_me", False)
-                            else row.get("display_name", "Contact")
-                        )
-                        messages.append(
-                            {
-                                "sender": sender,
-                                "msg": msg_row["message_text"],
-                                "ts": datetime.fromtimestamp(
-                                    msg_row["timestamp"]
-                                ).strftime("%d/%m/%Y %H:%M"),
-                            }
-                        )
+                    for msg_idx, msg_row in messages_df.iterrows():
+                        try:
+                            sender = (
+                                "Urb.Link"
+                                if msg_row.get("from_me", False)
+                                else row.get("display_name", "Contact")
+                            )
+                            messages.append(
+                                {
+                                    "sender": sender,
+                                    "msg": msg_row["message_text"],
+                                    "ts": datetime.fromtimestamp(
+                                        msg_row["timestamp"]
+                                    ).strftime("%d/%m/%Y %H:%M"),
+                                }
+                            )
+                        except Exception as msg_error:
+                            st.error(f"❌ **Error processing message {msg_idx}:** {str(msg_error)}")
+                            st.write(f"**Message data:** {dict(msg_row)}")
+                            if DEBUG:
+                                st.exception(msg_error)
+                            
             except Exception as e:
-                if DEBUG:
-                    print(f"DEBUG: Could not load messages from database: {e}")
+                st.error(f"🚨 **CRITICAL ERROR loading conversation messages**")
+                st.error(f"**Conversation ID:** {conversation_id}")
+                st.error(f"**Error type:** {type(e).__name__}")
+                st.error(f"**Error message:** {str(e)}")
+                
+                with st.expander("🔍 Detailed Error Information", expanded=True):
+                    st.write(f"**Phone number:** {row.get('whatsapp_number', 'N/A')}")
+                    st.write(f"**Display name:** {row.get('display_name', 'N/A')}")
+                    st.write(f"**Row data keys:** {list(row.keys())}")
+                    
+                    # Show the actual conversation_id value and type
+                    st.write(f"**Conversation ID type:** {type(conversation_id)}")
+                    st.write(f"**Conversation ID repr:** {repr(conversation_id)}")
+                    
+                    if DEBUG:
+                        st.exception(e)
+                
+                # Don't crash the app, just continue without messages
+                messages = []
 
         # If no messages from database, fall back to parsed conversation history
         if (
