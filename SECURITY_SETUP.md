@@ -21,7 +21,7 @@ This application requires secure handling of API keys and tokens. **Never commit
 3. Edit `.streamlit/secrets.toml` with your actual API credentials:
    ```toml
    [voxuy]
-   api_token = "68a1c480-bbcc-47d4-9b6f-f9cd7be56aef"
+   api_token = "your_actual_voxuy_token_here"
    
    [google_sheets]
    # Your Google Sheets API credentials here
@@ -34,7 +34,7 @@ This application requires secure handling of API keys and tokens. **Never commit
 
 Set the environment variable:
 ```bash
-export VOXUY_API_TOKEN="68a1c480-bbcc-47d4-9b6f-f9cd7be56aef"
+export VOXUY_API_TOKEN="your_actual_voxuy_token_here"
 ```
 
 ### 3. Verify Setup
