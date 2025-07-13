@@ -37,7 +37,8 @@ def get_voxuy_api_token():
     print("❌ ERROR: No Voxuy API token found! Please set VOXUY_API_TOKEN environment variable or configure Streamlit secrets.")
     raise Exception("Voxuy API token not configured. Please set VOXUY_API_TOKEN environment variable or add token to .streamlit/secrets.toml")
 
-VOXUY_API_TOKEN = get_voxuy_api_token()
+# Load token at runtime instead of module import time
+VOXUY_API_TOKEN = None  # Will be loaded when needed
 VOXUY_CUSTOM_MESSAGE_ID = "48800cc8-e0fb-41ff-bfdd-a8b1fe"
 VOXUY_WEBHOOK_URL = "https://sistema.voxuy.com/api/65294302-8497-476a-872e-1d1b778aede1/webhooks/voxuy/transaction"
 
@@ -63,6 +64,24 @@ def send_whatsapp_message(
     Returns:
         Dict containing success status and response details
     """
+    # Load token at runtime to ensure Streamlit context is available
+    global VOXUY_API_TOKEN
+    if VOXUY_API_TOKEN is None:
+        try:
+            VOXUY_API_TOKEN = get_voxuy_api_token()
+            print(f"🔑 Voxuy token loaded at runtime: {VOXUY_API_TOKEN[:8]}...")
+        except Exception as e:
+            print(f"❌ Failed to load Voxuy token at runtime: {e}")
+            return {
+                "success": False,
+                "status_code": None,
+                "api_response": None,
+                "api_success": None,
+                "api_message": f"Token loading error: {str(e)}",
+                "api_errors": None,
+                "error": f"Token loading error: {str(e)}"
+            }
+    
     headers = {
         'Content-Type': 'application/json'
     }
@@ -97,6 +116,14 @@ def send_whatsapp_message(
         status_code = response.status_code
         print(f"Voxuy API Response Status: {status_code}")
         print(f"Voxuy API Response Text: {response.text}")
+        
+        # Special debug for invalid token
+        if status_code == 400 and 'inválido' in response.text.lower():
+            print(f"🚨 DEBUG: Invalid token error detected!")
+            print(f"🔑 Token sent: '{VOXUY_API_TOKEN}'")
+            print(f"📏 Token length: {len(VOXUY_API_TOKEN)}")
+            print(f"🌐 Endpoint: {VOXUY_WEBHOOK_URL}")
+            print(f"📋 Full request data keys: {list(client_data.keys())}")
         
         # Try to parse the response as JSON
         try:
