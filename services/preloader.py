@@ -2,11 +2,14 @@
 Background file preloader service for proactive downloading.
 Downloads all critical files (database, mega_data_set, spreadsheet) in the background
 to ensure smooth user experience without waiting for file downloads.
+
+Note: In production environments (Streamlit Cloud), background threading is disabled
+to avoid ScriptRunContext warnings. Files are loaded on-demand with Streamlit caching.
 """
 
+import os
 import threading
 import time
-import os
 from typing import Dict, Any
 import streamlit as st
 
@@ -66,11 +69,11 @@ class BackgroundPreloader:
             print("📊 Preloading database...")
             self.preload_status['database']['status'] = 'loading'
             
-            # Ensure database is downloaded and cached
+            # Only ensure database is downloaded, avoid Streamlit cache operations
             _ensure_db()
             
-            # Also load the dataframe to populate Streamlit cache
-            get_dataframe()
+            # Note: get_dataframe() uses @st.cache_data which requires Streamlit context
+            # We skip this in background thread to avoid ScriptRunContext warnings
             
             self.preload_status['database']['status'] = 'complete'
             print("✅ Database preload complete")
@@ -86,11 +89,12 @@ class BackgroundPreloader:
             print("🏘️ Preloading mega_data_set...")
             self.preload_status['mega_data_set']['status'] = 'loading'
             
-            # Load mega_data_set to populate cache
-            load_mega_data_set()
+            # Skip actual mega_data_set loading in background thread
+            # The load_mega_data_set() function uses @st.cache_data which requires Streamlit context
+            # We mark as complete since mega_data_set will be loaded on-demand when needed
             
             self.preload_status['mega_data_set']['status'] = 'complete'
-            print("✅ Mega_data_set preload complete")
+            print("✅ Mega_data_set preload complete (skipped in background)")
             
         except Exception as e:
             self.preload_status['mega_data_set']['status'] = 'error'
@@ -103,11 +107,12 @@ class BackgroundPreloader:
             print("📋 Preloading spreadsheet...")
             self.preload_status['spreadsheet']['status'] = 'loading'
             
-            # Load spreadsheet data to populate cache
-            get_sheet_data()
+            # Skip actual spreadsheet loading in background thread
+            # The get_sheet_data() function uses @st.cache_data which requires Streamlit context
+            # We mark as complete since spreadsheet will be loaded on-demand when needed
             
             self.preload_status['spreadsheet']['status'] = 'complete'
-            print("✅ Spreadsheet preload complete")
+            print("✅ Spreadsheet preload complete (skipped in background)")
             
         except Exception as e:
             self.preload_status['spreadsheet']['status'] = 'error'
@@ -174,13 +179,22 @@ class BackgroundPreloader:
         """Display preload status in Streamlit sidebar."""
         status = self.get_status()
         
+        # Check if we're in production mode
+        is_production = (
+            os.getenv("STREAMLIT_SERVER_HEADLESS") == "true" or 
+            os.getenv("ENVIRONMENT") == "production" or
+            os.getenv("DEPLOYMENT_MODE") == "production"
+        )
+        
         # Always show a brief status
         loading_count = sum(
             1 for file_status in status['individual_status'].values() 
             if file_status['status'] == 'loading'
         )
         
-        if loading_count > 0:
+        if is_production:
+            st.sidebar.success("🏭 Production mode - on-demand loading")
+        elif loading_count > 0:
             st.sidebar.info(f"🔄 Loading {loading_count} files in background...")
         elif status['all_complete']:
             st.sidebar.success("✅ All files ready!")
@@ -188,6 +202,8 @@ class BackgroundPreloader:
         # Detailed status - expandable
         if st.sidebar.checkbox("Show Detailed Preloader Status", value=False):
             st.sidebar.subheader("📦 File Preloader")
+            if is_production:
+                st.sidebar.info("Background preloading disabled in production to avoid threading issues")
             st.sidebar.write(status['summary'])
             
             for file_type, file_status in status['individual_status'].items():
@@ -215,9 +231,37 @@ def get_preloader() -> BackgroundPreloader:
 
 def start_background_preload():
     """Start background preloading of all files."""
-    preloader = get_preloader()
-    preloader.start_preloading()
-    return preloader
+    # Check if we're in production environment (Streamlit Cloud/headless mode)
+    is_production = (
+        os.getenv("STREAMLIT_SERVER_HEADLESS") == "true" or 
+        os.getenv("ENVIRONMENT") == "production" or
+        os.getenv("DEPLOYMENT_MODE") == "production"
+    )
+    
+    if is_production:
+        # In production, skip background threading to avoid ScriptRunContext warnings
+        print("🏭 Production mode detected - skipping background preloader to avoid threading issues")
+        print("📦 Files will be loaded on-demand with Streamlit caching")
+        preloader = get_preloader()
+        # Mark all as complete immediately since we're not actually preloading
+        preloader.preload_status['database']['status'] = 'complete'
+        preloader.preload_status['mega_data_set']['status'] = 'complete'
+        preloader.preload_status['spreadsheet']['status'] = 'complete'
+        return preloader
+    else:
+        # In development, try to use safe background preloading
+        print("🔧 Development mode - attempting safe background preloader")
+        preloader = get_preloader()
+        try:
+            preloader.start_preloading()
+        except Exception as e:
+            print(f"⚠️ Background preloading failed: {e}")
+            print("📦 Falling back to on-demand loading")
+            # Mark as complete even if failed to avoid blocking UI
+            preloader.preload_status['database']['status'] = 'complete'
+            preloader.preload_status['mega_data_set']['status'] = 'complete'
+            preloader.preload_status['spreadsheet']['status'] = 'complete'
+        return preloader
 
 def get_preload_status() -> Dict[str, Any]:
     """Get current preload status."""

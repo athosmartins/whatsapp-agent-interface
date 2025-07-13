@@ -2,7 +2,7 @@
 
 import requests
 import json
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 # Voxuy API configuration
 VOXUY_API_TOKEN = "68a1c480-bbcc-47d4-9b6f-f9cd7be56aef"

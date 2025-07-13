@@ -12,7 +12,7 @@ Key optimizations:
 import pandas as pd
 import streamlit as st
 import time
-from typing import Dict, List, Set
+from typing import Dict, List
 import re
 from functools import lru_cache
 
@@ -320,7 +320,7 @@ def ultra_fast_batch_load_properties(conversation_data: pd.DataFrame) -> Dict[st
     total_time = time.time() - start_time
     total_properties = sum(len(props) for props in results.values())
     
-    print(f"✅ Ultra-fast loading complete!")
+    print("✅ Ultra-fast loading complete!")
     print(f"⏱️ Total time: {total_time:.2f} seconds") 
     print(f"📊 Results: {len(results)} phones with properties, {total_properties} total properties")
     if total_time > 0:

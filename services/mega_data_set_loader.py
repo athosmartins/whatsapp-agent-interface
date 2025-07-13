@@ -5,12 +5,8 @@ This service handles the integration between WhatsApp conversations and property
 
 import os
 import pandas as pd
-import tempfile
-import shutil
-import pathlib
 from typing import List, Dict, Optional
 import time
-from datetime import datetime
 import streamlit as st
 
 # Google Drive folder ID for mega_data_set files
@@ -32,7 +28,6 @@ def download_latest_mega_data_set() -> Optional[str]:
     """
     try:
         import json
-        import io
         from google.oauth2.service_account import Credentials
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaIoBaseDownload

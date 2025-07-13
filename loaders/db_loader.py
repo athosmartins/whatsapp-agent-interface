@@ -1,5 +1,8 @@
 # db_loader.py  ─ one-path loader
-import os, sqlite3, pandas as pd, time
+import os
+import sqlite3
+import pandas as pd
+import time
 
 GDRIVE_FILE_ID   = "1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw"   # snapshot folder/file ID
 LOCAL_DB_PATH    = "whatsapp_conversations.db"           # always the same name
@@ -12,7 +15,6 @@ def _download_from_drive(dest: str):
     """Download only the newest database file from Google Drive using Google Drive API."""
     try:
         import json
-        import io
         from google.oauth2.service_account import Credentials
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaIoBaseDownload
@@ -100,7 +102,11 @@ def _download_from_drive(dest: str):
 
 def _download_from_drive_fallback(dest: str):
     """Fallback method using gdown (downloads entire folder)."""
-    import gdown, pathlib, shutil, os, tempfile
+    import gdown
+    import pathlib
+    import shutil
+    import os
+    import tempfile
 
     tmp_dir = tempfile.mkdtemp()
     gdown.download_folder(
@@ -534,7 +540,7 @@ def get_conversations_with_sheets_data() -> pd.DataFrame:
                     # Print matching statistics
                     total_matches = match_stats['exact'] + match_stats['last8']
                     match_rate = (total_matches / len(conversations_df)) * 100
-                    print(f"Advanced matching complete:")
+                    print("Advanced matching complete:")
                     print(f"  Exact matches: {match_stats['exact']}")
                     print(f"  Last-8-digit matches: {match_stats['last8']}")
                     print(f"  Unmatched: {match_stats['unmatched']}")
