@@ -2630,7 +2630,57 @@ def show_property_map():
 # Show property map if we have properties
 show_property_map()
 
-# ─── FOOTER CAPTION ─────────────────────────────────────────────────────────
-st.caption(
-    f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}"
-)
+    # ─── FOOTER CAPTION ─────────────────────────────────────────────────────────
+    st.caption(
+        f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}"
+    )
+
+except Exception as critical_error:
+    # CRITICAL ERROR HANDLER - Prevents 503 errors in production
+    st.error("🚨 **CRITICAL SYSTEM ERROR DETECTED**")
+    st.error("The application encountered a critical error but has been prevented from crashing.")
+    
+    st.error(f"**Error Type:** {type(critical_error).__name__}")
+    st.error(f"**Error Message:** {str(critical_error)}")
+    
+    # Show conversation info if available
+    if 'auto_load_conversation' in locals() and auto_load_conversation:
+        st.error(f"**Target Conversation:** {auto_load_conversation}")
+    
+    # Show basic debugging info
+    with st.expander("🔍 Critical Error Debug Information", expanded=True):
+        st.write("**System State:**")
+        if 'df' in locals():
+            st.write(f"- DataFrame loaded: Yes, shape: {df.shape}")
+        else:
+            st.write("- DataFrame loaded: No")
+            
+        if 'idx' in locals():
+            st.write(f"- Current index: {idx}")
+        else:
+            st.write("- Current index: Not set")
+            
+        if 'row' in locals():
+            st.write(f"- Current row loaded: Yes")
+            st.write(f"- Phone number: {row.get('whatsapp_number', 'N/A')}")
+            st.write(f"- Display name: {row.get('display_name', 'N/A')}")
+        else:
+            st.write("- Current row loaded: No")
+            
+        # Show session state keys
+        st.write(f"- Session state keys: {list(st.session_state.keys())}")
+        
+        # Show full traceback in debug mode
+        if DEBUG:
+            st.write("**Full Traceback:**")
+            st.exception(critical_error)
+    
+    # Provide user guidance
+    st.info("**What you can do:**")
+    st.info("• Try refreshing the page")
+    st.info("• Go back to the main dashboard and try a different conversation")
+    st.info("• Contact support if this error persists")
+    
+    # Add navigation back to dashboard
+    if st.button("🏠 Return to Dashboard"):
+        st.switch_page("app.py")
