@@ -11,6 +11,25 @@ from services.preloader import start_background_preload, display_preloader_statu
 
 # ─── PAGE CONFIG ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="Home Dashboard", layout="wide")
+
+# ─── MESSAGE LISTENER FOR MAP NAVIGATION ─────────────────────────────────
+st.markdown("""
+<script>
+// Listen for messages from map popups
+window.addEventListener('message', function(event) {
+    if (event.data.type === 'navigate_to_processor') {
+        const conversationId = event.data.conversation_id;
+        console.log('Received navigation message for conversation:', conversationId);
+        
+        // Navigate to processor page with conversation_id parameter
+        const processorUrl = window.location.origin + '/Processor?conversation_id=' + encodeURIComponent(conversationId);
+        console.log('Navigating to:', processorUrl);
+        window.location.href = processorUrl;
+    }
+});
+</script>
+""", unsafe_allow_html=True)
+
 st.title("🏠 Home Dashboard")
 
 # ─── START BACKGROUND PRELOADER ─────────────────────────────────────────────
@@ -143,7 +162,12 @@ if hasattr(event, "selection") and event.selection and event.selection.get("rows
     selected_row_idx = event.selection["rows"][0]
     if selected_row_idx < len(grid_df):
         actual_idx = int(grid_df.iloc[selected_row_idx]["_idx"])
+        # Get conversation_id for URL parameter
+        conversation_id = df.iloc[actual_idx].get('conversation_id', df.iloc[actual_idx].get('whatsapp_number', ''))
         st.session_state.selected_idx = actual_idx
+        # Store conversation_id for URL update after navigation
+        if conversation_id:
+            st.session_state.pending_conversation_id = conversation_id
         st.switch_page("pages/Processor.py")
 
 # ─── BULK ACTIONS ─────────────────────────────────────────────────────────

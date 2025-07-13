@@ -207,6 +207,50 @@ else:
 # Apply styles
 st.markdown(STYLES, unsafe_allow_html=True)
 
+# ─── URL PARAMETER HANDLING ─────────────────────────────────────────────────
+# Check for conversation_id in URL parameters or session storage
+auto_load_conversation = None
+
+# Method 1: Check URL parameters
+try:
+    query_params = st.query_params
+    if 'conversation_id' in query_params:
+        auto_load_conversation = query_params['conversation_id']
+        st.info(f"🔗 Auto-loading conversation: {auto_load_conversation}")
+except:
+    pass
+
+# Method 2: Check session storage (set by map navigation)
+if not auto_load_conversation:
+    # JavaScript to check session storage and listen for map navigation
+    st.markdown("""
+    <script>
+    if (sessionStorage.getItem('auto_load_conversation')) {
+        const convId = sessionStorage.getItem('auto_load_conversation');
+        sessionStorage.removeItem('auto_load_conversation'); // Clear after use
+        window.parent.postMessage({type: 'auto_load_conversation', conversation_id: convId}, '*');
+    }
+    
+    // Listen for messages from the map (for navigation from map popups)
+    window.addEventListener('message', function(event) {
+        if (event.data.type === 'navigate_to_processor') {
+            const conversationId = event.data.conversation_id;
+            
+            // Navigate to processor page with conversation_id parameter in same tab
+            const processorUrl = window.location.origin + '/Processor?conversation_id=' + encodeURIComponent(conversationId);
+            console.log('Map navigation to:', processorUrl);
+            window.location.href = processorUrl;
+        }
+    });
+    </script>
+    """, unsafe_allow_html=True)
+
+# Method 3: Check if stored in session state from map navigation
+if 'auto_load_conversation_id' in st.session_state:
+    auto_load_conversation = st.session_state.auto_load_conversation_id
+    del st.session_state.auto_load_conversation_id  # Clear after use
+    st.info(f"🗺️ Loading conversation from map: {auto_load_conversation}")
+
 # ─── FLAGS ──────────────────────────────────────────────────────────────────
 DEV = True  # Set based on your environment
 
@@ -585,12 +629,42 @@ initialize_session_state()
 # Work with master_df
 df = st.session_state.master_df
 
+# ─── AUTO-LOADING CONVERSATION ───────────────────────────────────────────
+# If auto_load_conversation is specified, find and load that conversation
+if auto_load_conversation:
+    # Search for the conversation by conversation_id or whatsapp_number
+    if 'conversation_id' in df.columns:
+        matching_conversations = df[df['conversation_id'] == auto_load_conversation]
+    else:
+        matching_conversations = df[df['whatsapp_number'] == auto_load_conversation]
+    
+    if not matching_conversations.empty:
+        # Found the conversation, set idx to its position
+        conversation_idx = matching_conversations.index[0]
+        st.session_state.idx = conversation_idx
+        st.success(f"✅ Successfully loaded conversation: {auto_load_conversation}")
+    else:
+        st.warning(f"⚠️ Conversation {auto_load_conversation} not found in current dataset")
+
 # Ensure idx is within bounds
 st.session_state.idx = min(st.session_state.idx, len(df) - 1)
 idx = st.session_state.idx
 
 # Get current row
 row = df.iloc[idx]
+
+# Handle pending conversation_id from navigation
+if 'pending_conversation_id' in st.session_state:
+    pending_id = st.session_state.pending_conversation_id
+    st.query_params['conversation_id'] = pending_id
+    del st.session_state.pending_conversation_id
+
+# Update URL with current conversation_id if not already set
+elif not auto_load_conversation:
+    # Use whatsapp_number as conversation_id if conversation_id column doesn't exist
+    conversation_id = row.get('conversation_id', row.get('whatsapp_number', ''))
+    if conversation_id:
+        st.query_params['conversation_id'] = conversation_id
 
 # Store original values for this record
 store_original_values(idx, row)
@@ -615,11 +689,23 @@ st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
 def goto_prev():
     """Go to the previous conversation."""
     st.session_state.idx = max(st.session_state.idx - 1, 0)
+    # Update URL with conversation_id
+    new_idx = st.session_state.idx
+    if new_idx < len(df):
+        conversation_id = df.iloc[new_idx].get('conversation_id', df.iloc[new_idx].get('whatsapp_number', ''))
+        if conversation_id:
+            st.query_params['conversation_id'] = conversation_id
 
 
 def goto_next():
     """Go to the next conversation."""
     st.session_state.idx = min(st.session_state.idx + 1, len(df) - 1)
+    # Update URL with conversation_id
+    new_idx = st.session_state.idx
+    if new_idx < len(df):
+        conversation_id = df.iloc[new_idx].get('conversation_id', df.iloc[new_idx].get('whatsapp_number', ''))
+        if conversation_id:
+            st.query_params['conversation_id'] = conversation_id
 
 
 nav_prev_col, _, nav_next_col = st.columns([1, 2, 1])
@@ -1852,6 +1938,10 @@ if hasattr(st.session_state, 'property_modal_data') and st.session_state.propert
                                 # Navigate to this conversation
                                 st.session_state.idx = conv_row['row_index']
                                 st.session_state.property_modal_data = {'show_modal': False}
+                                # Update URL with new conversation_id
+                                new_conversation_id = conv_row.get('conversation_id', conv_row.get('phone', ''))
+                                if new_conversation_id:
+                                    st.query_params['conversation_id'] = new_conversation_id
                                 st.rerun()
                         
                         st.divider()
@@ -1898,22 +1988,9 @@ def show_property_map():
     if not properties:
         return
     
-    st.header("🗺️ Mapa de Propriedades")
-    st.write("Visualização geográfica de todas as propriedades associadas a este contato:")
     
-    # Map style selector
-    from utils.property_map import get_property_map_summary, render_property_map_streamlit, get_available_map_styles
-    
-    # Map style selector (full width)
-    available_styles = get_available_map_styles()
-    selected_style = st.selectbox(
-        "🎨 Estilo do Mapa",
-        options=list(available_styles.keys()),
-        format_func=lambda x: available_styles[x],
-        key=f"map_style_{phone_number}",
-        index=0,  # Default to "Light" (first in the list)
-        help="Escolha o estilo de visualização do mapa"
-    )
+    # Import map functions (style selector moved to advanced options)
+    from utils.property_map import get_property_map_summary, render_property_map_streamlit
     
     # Show property summary
     summary = get_property_map_summary(properties)
@@ -1950,7 +2027,7 @@ def show_property_map():
     
     # Render the interactive map with selected style
     try:
-        render_property_map_streamlit(properties, map_style=selected_style, enable_extra_options=True)
+        render_property_map_streamlit(properties, map_style="Light", enable_extra_options=True)
     except Exception as e:
         st.error(f"Erro ao carregar mapa: {e}")
         st.info("💡 Para ver o mapa, instale as dependências: `pip install folium streamlit-folium`")

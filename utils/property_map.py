@@ -279,29 +279,9 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
             st.warning("Nenhuma propriedade com dados geográficos encontrada.")
             return
         
-        st.success(f"🗺️ Mostrando {len(properties_with_geometry)} propriedades no mapa")
+        # Removed properties count message as requested
         
-        # Show available columns info for debugging
-        if enable_extra_options:
-            with st.expander("🔍 Informações das Colunas", expanded=False):
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("**Colunas Disponíveis:**")
-                    all_cols = set()
-                    for prop in properties_with_geometry:
-                        all_cols.update(prop.keys())
-                    for col in sorted(all_cols):
-                        if col not in {'GEOMETRY', 'geometry', 'id', 'ID', '_id'}:
-                            st.write(f"• {col}")
-                
-                with col2:
-                    st.write("**Exemplo de Dados:**")
-                    if properties_with_geometry:
-                        sample_prop = properties_with_geometry[0]
-                        for key, value in sample_prop.items():
-                            if key not in {'GEOMETRY', 'geometry'}:
-                                display_value = str(value)[:50] + "..." if len(str(value)) > 50 else str(value)
-                                st.write(f"**{key}**: {display_value}")
+        # Removed column info section - moved to advanced options
         
         # Calculate map center from all properties
         all_centers = []
@@ -385,93 +365,44 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
             }
         }
         
-        # Get style configuration  
-        style_config = map_styles.get(map_style, map_styles["Light"])
-        
-        # Add map controls and options if enabled
+        # Get style configuration - check advanced options first
         if enable_extra_options:
-            st.subheader("🛠️ Opções Avançadas do Mapa")
-            
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                # Marker options
-                show_markers = st.checkbox("📍 Mostrar Marcadores", value=True, help="Mostrar marcadores no centro das propriedades")
-                show_polygons = st.checkbox("🔺 Mostrar Polígonos", value=True, help="Mostrar contornos das propriedades") 
-                marker_cluster_enabled = st.checkbox("🎯 Agrupar Marcadores", value=True, help="Agrupar marcadores próximos")
-            
-            with col2:
-                # Visual options
-                polygon_opacity = st.slider("🎨 Opacidade dos Polígonos", 0.0, 1.0, 1.0, 0.1, help="Transparência dos polígonos")
-                polygon_weight = st.slider("📏 Espessura das Bordas", 1, 5, 1, help="Espessura das linhas dos polígonos")
-                show_legend = st.checkbox("📋 Mostrar Legenda", value=True, help="Mostrar legenda no mapa")
-                
-                # Color-by-column selector - dynamically get all available columns
-                all_columns = set()
-                for prop in properties_with_geometry:
-                    all_columns.update(prop.keys())
-                
-                # Filter out technical columns and sort alphabetically
-                excluded_columns = {'GEOMETRY', 'geometry', 'id', 'ID', '_id', '_conversation_id'}
-                
-                # Separate conversation columns for better organization
-                conversation_columns = []
-                property_columns = []
-                
-                for col in all_columns:
-                    if col not in excluded_columns and col.strip():
-                        if col.startswith('_conversation_'):
-                            # Make conversation columns more user-friendly
-                            if col == '_conversation_display_name':
-                                conversation_columns.append('👤 Nome do Contato')
-                            elif col == '_conversation_phone':
-                                conversation_columns.append('📞 Telefone do Contato')
-                        else:
-                            property_columns.append(col)
-                
-                # Combine all columns with conversation columns first (if any)
-                available_columns = ['Índice Sequencial'] + sorted(conversation_columns) + sorted(property_columns)
-                
-                # Create mapping for display names back to actual column names
-                column_name_mapping = {
-                    '👤 Nome do Contato': '_conversation_display_name',
-                    '📞 Telefone do Contato': '_conversation_phone'
-                }
-                
-                color_by_column = st.selectbox(
-                    "🎨 Colorir por:",
-                    options=available_columns,
-                    index=0,
-                    help="Escolha qual coluna usar para definir as cores dos polígonos"
-                )
-                
-                # Show unique values count for selected column
-                if color_by_column != "Índice Sequencial":
-                    # Get actual column name (handle conversation column mapping)
-                    actual_column = column_name_mapping.get(color_by_column, color_by_column)
-                    unique_count = len(set(
-                        str(prop.get(actual_column, 'N/A')).strip() or 'N/A'
-                        for prop in properties_with_geometry
-                    ))
-                    st.caption(f"📊 {unique_count} valores únicos em '{color_by_column}'")
-            
-            with col3:
-                # Info options
-                show_tooltips = st.checkbox("💬 Mostrar Tooltips", value=True, help="Mostrar informações ao passar o mouse")
-                show_property_info = st.checkbox("ℹ️ Info Detalhada nos Popups", value=True, help="Mostrar informações completas nos popups")
-                
+            selected_map_style = st.session_state.get('advanced_map_style', map_style)
         else:
-            # Default values when options are disabled
-            show_markers = True
-            show_polygons = True
-            marker_cluster_enabled = True
-            polygon_opacity = 1.0  # Changed to 1.0 as requested
-            polygon_weight = 1     # Changed to 1 as requested
+            selected_map_style = map_style
+        style_config = map_styles.get(selected_map_style, map_styles["Light"])
+        
+        # Store advanced options setup for later rendering
+        advanced_options_enabled = enable_extra_options
+        
+        # Initialize default values when advanced options are disabled
+        if not enable_extra_options:
+            show_markers = False
+            show_polygons = True  
+            marker_cluster_enabled = False
+            polygon_opacity = 1.0
+            polygon_weight = 1
             show_legend = True
             show_tooltips = True
             show_property_info = True
             color_by_column = "Índice Sequencial"
             column_name_mapping = {}
+            selected_tooltip_fields = ['BAIRRO', 'ENDERECO', 'AREA TERRENO', 'TIPO CONSTRUTIVO', 'AREA CONSTRUCAO', 'FRACAO IDEAL']
+            selected_popup_fields = ['ZONA FISCAL', 'QUARTEIRAO', 'LOTE', 'INDICE CADASTRAL', 'ZONEAMENTO', 'ADE', 'DESCRICAO ALTIMETRIA', 'GRAU TOMBAMENTO']
+        else:
+            # Read values from advanced options session state, or use defaults
+            show_markers = st.session_state.get('advanced_show_markers', False)
+            show_polygons = st.session_state.get('advanced_show_polygons', True)
+            marker_cluster_enabled = st.session_state.get('advanced_marker_cluster', False)
+            polygon_opacity = st.session_state.get('advanced_polygon_opacity', 1.0)
+            polygon_weight = st.session_state.get('advanced_polygon_weight', 1)
+            show_legend = st.session_state.get('advanced_show_legend', True)
+            show_tooltips = st.session_state.get('advanced_show_tooltips', True)
+            show_property_info = st.session_state.get('advanced_show_property_info', True)
+            color_by_column = st.session_state.get('advanced_color_by_column', "Índice Sequencial")
+            column_name_mapping = {}
+            selected_tooltip_fields = st.session_state.get('advanced_tooltip_fields', ['BAIRRO', 'ENDERECO', 'AREA TERRENO', 'TIPO CONSTRUTIVO', 'AREA CONSTRUCAO', 'FRACAO IDEAL'])
+            selected_popup_fields = st.session_state.get('advanced_popup_fields', ['ZONA FISCAL', 'QUARTEIRAO', 'LOTE', 'INDICE CADASTRAL', 'ZONEAMENTO', 'ADE', 'DESCRICAO ALTIMETRIA', 'GRAU TOMBAMENTO'])
         
         # Re-create map with updated options
         m = folium.Map(
@@ -561,40 +492,64 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
             else:
                 valor_formatado = "N/A"
             
-            # Create popup content based on options
-            if show_property_info:
-                # Add conversation info if available (from conversations view)
-                conversation_info = ""
-                if conversation_name:
-                    conversation_info = f"""
-                    <hr style="margin: 10px 0;">
-                    <p><strong>👤 Contato:</strong> {conversation_name}</p>
-                    <p><strong>📞 Telefone:</strong> {conversation_phone}</p>
-                    """
+            # Create dynamic popup content based on selected fields
+            popup_parts = []
+            
+            # Field mapping for conversation fields
+            popup_field_mapping = {
+                '👤 Nome do Contato': '_conversation_display_name',
+                '📞 Telefone do Contato': '_conversation_phone',
+                '🆔 ID da Conversa': '_conversation_id'
+            }
+            
+            # Build popup content dynamically
+            for field in selected_popup_fields:
+                # Get actual field name (handle conversation field mapping)
+                actual_field = popup_field_mapping.get(field, field)
+                value = prop.get(actual_field)
                 
+                if value and str(value).strip() and str(value).strip() != 'N/A':
+                    # Format the field name for display
+                    if field.startswith('👤') or field.startswith('📞') or field.startswith('🆔'):
+                        display_name = field  # Keep emoji and name
+                        icon = ""  # No extra icon needed
+                    else:
+                        # Add appropriate icons for property fields
+                        field_icons = {
+                            'ENDERECO': '🏠',
+                            'BAIRRO': '📍',
+                            'TIPO CONSTRUTIVO': '🏗️',
+                            'AREA TERRENO': '📐',
+                            'AREA CONSTRUCAO': '🏢',
+                            'NET VALOR': '💰',
+                            'INDICE CADASTRAL': '🔢'
+                        }
+                        icon = field_icons.get(field, '📋')
+                        display_name = f"{icon} {field.replace('_', ' ').title()}"
+                    
+                    # Format value based on field type
+                    if field == 'NET VALOR' and isinstance(value, (int, float)) and pd.notna(value):
+                        formatted_value = f"R$ {value:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+                    elif field in ['AREA TERRENO', 'AREA CONSTRUCAO'] and str(value).replace('.', '').isdigit():
+                        formatted_value = f"{value} m²"
+                    else:
+                        formatted_value = str(value).strip()
+                    
+                    popup_parts.append(f"<p><strong>{display_name}:</strong> {formatted_value}</p>")
+            
+            # Create popup HTML
+            if popup_parts:
+                popup_html = f"""
+                <div style="width: 320px;">
+                    {''.join(popup_parts)}
+                </div>
+                """
+            else:
+                # Fallback popup
                 popup_html = f"""
                 <div style="width: 300px;">
                     <h4>🏠 {endereco}</h4>
                     <p><strong>📍 Bairro:</strong> {bairro}</p>
-                    <p><strong>🔢 Índice:</strong> {indice}</p>
-                    <p><strong>🏗️ Tipo:</strong> {tipo}</p>
-                    <p><strong>📐 Área Terreno:</strong> {area_terreno} m²</p>
-                    <p><strong>🏢 Área Construção:</strong> {area_construcao} m²</p>
-                    <p><strong>💰 Valor NET:</strong> {valor_formatado}</p>
-                    {conversation_info}
-                </div>
-                """
-            else:
-                # Simple popup with conversation info if available
-                conversation_info = ""
-                if conversation_name:
-                    conversation_info = f"<p><strong>👤</strong> {conversation_name}</p>"
-                
-                popup_html = f"""
-                <div style="width: 220px;">
-                    <h4>🏠 {endereco}</h4>
-                    <p><strong>📍</strong> {bairro}</p>
-                    {conversation_info}
                 </div>
                 """
             
@@ -625,19 +580,71 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
                 if polygon:
                     # Add polygon to map if enabled
                     if show_polygons:
-                        # Create safe tooltip text for polygon
-                        tooltip_endereco = str(endereco).strip() if endereco and str(endereco).strip() != 'N/A' else 'Endereço não disponível'
-                        tooltip_bairro = str(bairro).strip() if bairro and str(bairro).strip() != 'N/A' else 'Bairro não disponível'
-                        tooltip_text = f"{tooltip_endereco}, {tooltip_bairro}"
+                        # Create dynamic tooltip text based on selected fields
+                        tooltip_parts = []
                         
-                        polygon_obj = folium.Polygon(
-                            locations=polygon,
-                            color=color,
-                            weight=polygon_weight,
-                            fillColor=color,
-                            fillOpacity=polygon_opacity,
-                            popup=folium.Popup(popup_html, max_width=300)
-                        )
+                        # Mapping for conversation fields
+                        field_mapping = {
+                            '👤 Nome do Contato': '_conversation_display_name',
+                            '📞 Telefone do Contato': '_conversation_phone',
+                            '🆔 ID da Conversa': '_conversation_id'
+                        }
+                        
+                        for field in selected_tooltip_fields:
+                            # Get actual field name (handle conversation field mapping)
+                            actual_field = field_mapping.get(field, field)
+                            value = prop.get(actual_field)
+                            
+                            if value and str(value).strip() and str(value).strip() != 'N/A':
+                                # Format the field name for display
+                                if field.startswith('👤') or field.startswith('📞') or field.startswith('🆔'):
+                                    display_name = field.split(' ', 1)[1] if ' ' in field else field  # Remove emoji
+                                else:
+                                    display_name = field.replace('_', ' ').title()
+                                
+                                tooltip_parts.append(f"{display_name}: {str(value).strip()}")
+                        
+                        # Join with HTML line breaks for better readability
+                        tooltip_text = "<br>".join(tooltip_parts) if tooltip_parts else "Informações não disponíveis"
+                        
+                        # Create polygon with enhanced popup for processor navigation
+                        conversation_id = prop.get('_conversation_id')
+                        if conversation_id and conversation_id != 'N/A':
+                            # Simple hyperlink approach
+                            processor_url = f"/Processor?conversation_id={conversation_id}"
+                            enhanced_popup = popup_html + f"""
+                            <hr style="margin: 10px 0;">
+                            <div style="text-align: center;">
+                                <p style="font-size: 13px; margin: 8px 0;">
+                                    <a href="{processor_url}" 
+                                       style="display: inline-block; background: #0066cc; color: white; text-decoration: none; 
+                                              padding: 8px 16px; border-radius: 4px; font-weight: bold; font-size: 13px;">
+                                        📝 Abrir Conversa no Processor
+                                    </a>
+                                </p>
+                                <p style="font-size: 11px; color: #666; margin: 5px 0;">
+                                    ID: <code style="background: #f0f0f0; padding: 2px 4px; border-radius: 3px;">{conversation_id}</code>
+                                </p>
+                            </div>
+                            """
+                            
+                            polygon_obj = folium.Polygon(
+                                locations=polygon,
+                                color=color,
+                                weight=polygon_weight,
+                                fillColor=color,
+                                fillOpacity=polygon_opacity,
+                                popup=folium.Popup(enhanced_popup, max_width=420)
+                            )
+                        else:
+                            polygon_obj = folium.Polygon(
+                                locations=polygon,
+                                color=color,
+                                weight=polygon_weight,
+                                fillColor=color,
+                                fillOpacity=polygon_opacity,
+                                popup=folium.Popup(popup_html, max_width=320)
+                            )
                         
                         # Add tooltip to polygon if enabled and valid
                         if show_tooltips and tooltip_text and len(tooltip_text.strip()) > 3:
@@ -649,23 +656,20 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
                     if show_markers:
                         center = get_polygon_center(polygon)
                         if center:
+                            # Use the same enhanced popup for markers
+                            marker_popup = enhanced_popup if conversation_id and conversation_id != 'N/A' else popup_html
+                            marker_popup_width = 420 if conversation_id and conversation_id != 'N/A' else 300
+                            
                             # Create marker with proper tooltip
                             marker = folium.Marker(
                                 location=center,
-                                popup=folium.Popup(popup_html, max_width=300),
+                                popup=folium.Popup(marker_popup, max_width=marker_popup_width),
                                 icon=folium.Icon(color=color, icon='home', prefix='fa')
                             )
                             
-                            # Add tooltip if enabled
-                            if show_tooltips:
-                                # Create safe tooltip text
-                                tooltip_endereco = str(endereco).strip() if endereco and str(endereco).strip() != 'N/A' else 'Endereço não disponível'
-                                tooltip_bairro = str(bairro).strip() if bairro and str(bairro).strip() != 'N/A' else 'Bairro não disponível'
-                                tooltip_text = f"{tooltip_endereco}, {tooltip_bairro}"
-                                
-                                # Ensure tooltip text is not empty and has valid characters
-                                if tooltip_text and len(tooltip_text.strip()) > 3:
-                                    marker.add_child(folium.Tooltip(tooltip_text, permanent=False))
+                            # Add tooltip if enabled - reuse the same tooltip text from polygon
+                            if show_tooltips and tooltip_text and len(tooltip_text.strip()) > 3:
+                                marker.add_child(folium.Tooltip(tooltip_text, permanent=False))
                             
                             marker.add_to(marker_cluster)
         
@@ -686,18 +690,123 @@ def render_property_map_streamlit(properties: List[Dict[str, Any]], map_style: s
                         bottom: 50px; right: 50px; width: 240px; height: auto; 
                         background-color: white; border:2px solid grey; z-index:9999; 
                         font-size:12px; padding: 10px; border-radius: 5px;">
-                <h4>🏠 Propriedades</h4>
-                <p><i class="fa fa-home" style="color:red"></i> {len(properties_with_geometry)} propriedades encontradas</p>
-                <p>🔺 Polígonos mostram área exata</p>
-                <p>📍 Marcadores no centro de cada propriedade</p>
-                <p>🎯 Zoom otimizado automaticamente</p>
                 {color_legend}
             </div>
             """
             m.get_root().html.add_child(folium.Element(legend_html))
         
         # Render map in Streamlit with full width and increased height (50% more than 400 = 600)
-        st_folium.st_folium(m, use_container_width=True, height=600)
+        st_folium.st_folium(m, use_container_width=True, height=1000)
+        
+        # Advanced options button below the map
+        if advanced_options_enabled:
+            if st.button("🛠️ Opções Avançadas do Mapa"):
+                st.session_state.show_advanced_options = not st.session_state.get('show_advanced_options', False)
+            
+            if st.session_state.get('show_advanced_options', False):
+                st.markdown("---")
+                st.subheader("🛠️ Opções Avançadas do Mapa")
+                
+                # Map Style Selector
+                map_styles = {
+                    "Light": {"tiles": "openstreetmap", "attr": "OpenStreetMap"},
+                    "Dark": {"tiles": "cartodbdark_matter", "attr": "CartoDB"},
+                    "Satellite": {"tiles": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", "attr": "Esri"},
+                    "Terrain": {"tiles": "https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.png", "attr": "Stamen"},
+                    "Watercolor": {"tiles": "https://stamen-tiles.a.ssl.fastly.net/watercolor/{z}/{x}/{y}.png", "attr": "Stamen"}
+                }
+                
+                st.selectbox(
+                    "🎨 Estilo do Mapa",
+                    options=list(map_styles.keys()),
+                    format_func=lambda x: f"{x} Map",
+                    key="advanced_map_style",
+                    help="Escolha o estilo de visualização do mapa"
+                )
+                
+                # Visual Options
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.checkbox("📍 Mostrar Marcadores", value=False, key="advanced_show_markers", help="Mostrar marcadores no centro das propriedades")
+                    st.checkbox("🔺 Mostrar Polígonos", value=True, key="advanced_show_polygons", help="Mostrar contornos das propriedades")
+                    st.checkbox("🎯 Agrupar Marcadores", value=False, key="advanced_marker_cluster", help="Agrupar marcadores próximos")
+                
+                with col2:
+                    st.slider("🎨 Opacidade dos Polígonos", 0.0, 1.0, 1.0, 0.1, key="advanced_polygon_opacity", help="Transparência dos polígonos")
+                    st.slider("📏 Espessura das Bordas", 1, 5, 1, key="advanced_polygon_weight", help="Espessura das linhas dos polígonos")
+                    st.checkbox("📋 Mostrar Legenda", value=True, key="advanced_show_legend", help="Mostrar legenda no mapa")
+                
+                with col3:
+                    st.checkbox("🏷️ Mostrar Tooltips", value=True, key="advanced_show_tooltips", help="Mostrar informações ao passar o mouse")
+                    st.checkbox("ℹ️ Informações nos Popups", value=True, key="advanced_show_property_info", help="Mostrar informações detalhadas nos popups")
+                
+                # Color-by-column selector
+                all_columns = set()
+                for prop in properties_with_geometry:
+                    all_columns.update(prop.keys())
+                
+                excluded_columns = {'GEOMETRY', 'geometry', 'id', 'ID', '_id', '_conversation_id'}
+                available_columns = sorted([col for col in all_columns if col not in excluded_columns])
+                color_options = ['Índice Sequencial'] + available_columns
+                
+                st.selectbox(
+                    "🎨 Colorir por:",
+                    options=color_options,
+                    index=0,
+                    key="advanced_color_by_column",
+                    help="Escolha uma coluna para colorir as propriedades"
+                )
+                
+                # Field Selection
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    default_tooltip_fields = ['BAIRRO', 'ENDERECO', 'AREA TERRENO', 'TIPO CONSTRUTIVO', 'AREA CONSTRUCAO', 'FRACAO IDEAL']
+                    st.multiselect(
+                        "🏷️ Campos no Tooltip:",
+                        options=available_columns,
+                        default=[f for f in default_tooltip_fields if f in available_columns],
+                        key="advanced_tooltip_fields",
+                        help="Escolha quais informações mostrar ao passar o mouse"
+                    )
+                
+                with col2:
+                    default_popup_fields = ['ZONA FISCAL', 'QUARTEIRAO', 'LOTE', 'INDICE CADASTRAL', 'ZONEAMENTO', 'ADE', 'DESCRICAO ALTIMETRIA', 'GRAU TOMBAMENTO']
+                    available_popup_options = [col for col in available_columns if col not in st.session_state.get('advanced_tooltip_fields', [])]
+                    st.multiselect(
+                        "📋 Campos no Popup:",
+                        options=available_popup_options,
+                        default=[f for f in default_popup_fields if f in available_popup_options],
+                        key="advanced_popup_fields",
+                        help="Escolha quais informações mostrar nos popups ao clicar nas propriedades"
+                    )
+                
+                # Column information section
+                with st.expander("🔍 Informações das Colunas", expanded=False):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write("**Colunas Disponíveis:**")
+                        for col in sorted(all_columns):
+                            if col not in {'GEOMETRY', 'geometry', 'id', 'ID', '_id'}:
+                                st.write(f"• {col}")
+                    
+                    with col2:
+                        st.write("**Exemplo de Dados:**")
+                        if properties_with_geometry:
+                            sample_prop = properties_with_geometry[0]
+                            for key, value in sample_prop.items():
+                                if key not in {'GEOMETRY', 'geometry'}:
+                                    display_value = str(value)[:50] + "..." if len(str(value)) > 50 else str(value)
+                                    st.write(f"**{key}**: {display_value}")
+                
+                # Apply button to refresh map with new settings
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    if st.button("🔄 Aplicar Configurações", type="primary"):
+                        st.rerun()
+                with col2:
+                    st.info("💡 Clique em 'Aplicar Configurações' para atualizar o mapa com suas alterações.")
         
     except ImportError:
         st.error("❌ Bibliotecas de mapeamento não disponíveis. Execute: pip install folium streamlit-folium")

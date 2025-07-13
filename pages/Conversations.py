@@ -121,12 +121,25 @@ def format_date_header(timestamp):
     except:
         return ""
 
-# Initialize session state
+# Initialize session state for persistent filters
 if 'selected_conversation_id' not in st.session_state:
     st.session_state.selected_conversation_id = None
 
-if 'filter_state' not in st.session_state:
-    st.session_state.filter_state = {}
+# Initialize persistent filter state
+if 'conversations_filter_state' not in st.session_state:
+    st.session_state.conversations_filter_state = {
+        'display_name_filter': [],
+        'phone_filter': [],
+        'expected_name_filter': [],
+        'cpf_filter': [],
+        'classificacao_filter': [],
+        'bairro_filter': [],
+        'status_filter': [],
+        'endereco_filter': [],
+        'complemento_filter': [],
+        'only_unarchived_filter': False,
+        'only_unread_filter': False
+    }
 
 # ─── ULTRA-FAST PROPERTY MAP FUNCTION ──────────────────────────────────────
 # PERFORMANCE OPTIMIZATION: Using ultra-fast batch loader for 50x speed improvement
@@ -159,7 +172,6 @@ def show_filtered_conversations_map(filtered_df):
     if filtered_df.empty:
         return
     
-    st.header("🗺️ Mapa de Propriedades dos Contatos Filtrados")
     
     # Limit conversations for performance
     max_conversations = 200
@@ -168,7 +180,7 @@ def show_filtered_conversations_map(filtered_df):
     if len(filtered_df) > max_conversations:
         st.warning(f"⚡ Mostrando propriedades dos primeiros {max_conversations} contatos para melhor performance. Total filtrado: {len(filtered_df)}")
     
-    st.write(f"Visualização geográfica de todas as propriedades associadas aos {len(limited_df)} contatos:")
+    # Removed visualization description as requested
     
     # Ultra-fast batch load all properties - 50x faster!
     import time
@@ -242,30 +254,27 @@ def show_filtered_conversations_map(filtered_df):
         
         return
     
-    # Show summary statistics
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("📞 Contatos Filtrados", len(filtered_df))
-    with col2:
-        st.metric("🏠 Contatos com Propriedades", conversations_with_properties)
-    with col3:
-        st.metric("🏢 Total de Propriedades", len(all_properties))
-    with col4:
-        match_rate = (conversations_with_properties / len(filtered_df)) * 100 if len(filtered_df) > 0 else 0
-        st.metric("📊 Taxa de Match", f"{match_rate:.1f}%")
+    # Removed summary statistics as requested
     
-    # Map style selector
-    from utils.property_map import render_property_map_streamlit, get_available_map_styles
+    # Show quick reference for conversation IDs if debug mode is enabled
+    if DEBUG and all_properties:
+        with st.expander("🆔 IDs das Conversas com Propriedades", expanded=False):
+            conversation_ids = set()
+            for prop in all_properties:
+                conv_id = prop.get('_conversation_id')
+                conv_name = prop.get('_conversation_display_name')
+                if conv_id and conv_id != 'N/A':
+                    conversation_ids.add((conv_id, conv_name or 'Nome não disponível'))
+            
+            if conversation_ids:
+                st.write("**IDs para busca no Processor:**")
+                for conv_id, conv_name in sorted(conversation_ids):
+                    st.write(f"• `{conv_id}` - {conv_name}")
+            else:
+                st.write("Nenhum ID de conversa encontrado")
     
-    available_styles = get_available_map_styles()
-    selected_style = st.selectbox(
-        "🎨 Estilo do Mapa",
-        options=list(available_styles.keys()),
-        format_func=lambda x: available_styles[x],
-        key="conversations_map_style",
-        index=0,  # Default to "Light"
-        help="Escolha o estilo de visualização do mapa"
-    )
+    # Import map function (style selector moved to advanced options)
+    from utils.property_map import render_property_map_streamlit
     
     # Render the map with all properties
     try:
@@ -275,9 +284,7 @@ def show_filtered_conversations_map(filtered_df):
             st.write("📋 Debug: Primeiras 3 propriedades:")
             for i, prop in enumerate(all_properties[:3]):
                 st.write(f"   {i+1}. {prop.get('ENDERECO', 'N/A')} - Geometry: {len(str(prop.get('GEOMETRY', '')))}")
-        
-        # Add debugging before map render
-        st.write("🔍 About to render map...")
+    
         
         # Add a container to isolate the map rendering
         map_container = st.container()
@@ -286,19 +293,54 @@ def show_filtered_conversations_map(filtered_df):
             if DEBUG and len(all_properties) > 0:
                 st.write("📊 Map render test:")
                 st.write(f"   - Properties: {len(all_properties)}")
-                st.write(f"   - Style: {selected_style}")
+                st.write(f"   - Style: Light (default)")
                 st.write(f"   - First property: {all_properties[0].get('ENDERECO', 'N/A')}")
             
             render_property_map_streamlit(
                 all_properties, 
-                map_style=selected_style, 
+                map_style="Light",  # Default style, can be changed in advanced options
                 enable_extra_options=True,
-                enable_style_selector=False  # Style selector already above
+                enable_style_selector=False  # Style selector moved to advanced options
             )
         
         st.write("✅ Map render completed")
         
-        st.success("🗺️ Mapa carregado com sucesso!")
+        # Add helpful info about processor navigation
+        
+        # Add JavaScript to handle navigation messages from map
+        st.markdown("""
+        <script>
+        // Listen for messages from the map
+        window.addEventListener('message', function(event) {
+            if (event.data.type === 'navigate_to_processor') {
+                const conversationId = event.data.conversation_id;
+                
+                // Store in session storage for processor page
+                sessionStorage.setItem('processor_conversation_id', conversationId);
+                sessionStorage.setItem('auto_search_processor', 'true');
+                
+                // Navigate to processor page
+                window.location.href = window.location.origin + window.location.pathname + '?conversation_id=' + encodeURIComponent(conversationId);
+            }
+        });
+        
+        // Check if we need to auto-search in processor
+        if (sessionStorage.getItem('auto_search_processor') === 'true') {
+            const convId = sessionStorage.getItem('processor_conversation_id');
+            if (convId) {
+                // Clear the flags
+                sessionStorage.removeItem('auto_search_processor');
+                sessionStorage.removeItem('processor_conversation_id');
+                
+                // If we're on conversations page, navigate to processor
+                if (window.location.pathname.includes('Conversations')) {
+                    window.location.href = window.location.origin + window.location.pathname.replace('Conversations', 'Processor') + '?search=' + encodeURIComponent(convId);
+                }
+            }
+        }
+        </script>
+        """, unsafe_allow_html=True)
+        
     except Exception as e:
         st.error(f"❌ Erro ao carregar mapa: {e}")
         if DEBUG:
@@ -637,6 +679,34 @@ try:
                     
             return current_df
         
+        # Helper function for persistent multiselect filters
+        def persistent_multiselect(label, options, filter_key, widget_key, help_text=None):
+            current_selections = st.session_state.conversations_filter_state.get(filter_key, [])
+            all_options = list(set(options + current_selections))
+            sorted_options = sorted(all_options, key=lambda x: x.lower()) if all_options else []
+            
+            selected = st.multiselect(
+                label,
+                options=sorted_options,
+                default=current_selections,
+                key=widget_key,
+                help=help_text
+            )
+            st.session_state.conversations_filter_state[filter_key] = selected
+            return selected
+        
+        # Helper function for persistent checkbox filters
+        def persistent_checkbox(label, filter_key, widget_key, help_text=None):
+            current_value = st.session_state.conversations_filter_state.get(filter_key, False)
+            selected = st.checkbox(
+                label,
+                value=current_value,
+                key=widget_key,
+                help=help_text
+            )
+            st.session_state.conversations_filter_state[filter_key] = selected
+            return selected
+
         # === INFORMAÇÕES PESSOAIS ===
         st.markdown("### 👤 Informações Pessoais")
         if not has_sheets_data:
@@ -648,16 +718,11 @@ try:
             current_df = get_current_filtered_dataset(exclude_filter_key='display_names')
             available_display_names = get_filtered_options(current_df)['display_names']
             
-            # Preserve currently selected values by adding them to options if not present
-            current_selections = st.session_state.get('display_name_filter', [])
-            all_options = list(set(available_display_names + current_selections))
-            available_display_names_sorted = sorted(all_options, key=lambda x: x.lower())
-            
-            selected_display_names = st.multiselect(
+            selected_display_names = persistent_multiselect(
                 "🔤 Display Name:",
-                options=available_display_names_sorted,
-                default=current_selections,
-                key="display_name_filter"
+                available_display_names,
+                'display_name_filter',
+                'display_name_filter'
             )
     
         with col2:
@@ -665,16 +730,11 @@ try:
             current_df = get_current_filtered_dataset(exclude_filter_key='expected_names')
             available_expected_names = get_filtered_options(current_df)['expected_names']
             
-            # Preserve currently selected values
-            current_selections = st.session_state.get('expected_name_filter', [])
-            all_options = list(set(available_expected_names + current_selections))
-            available_expected_names_sorted = sorted(all_options, key=lambda x: x.lower())
-            
-            selected_expected_names = st.multiselect(
+            selected_expected_names = persistent_multiselect(
                 "🙍‍♂️ Expected Name:",
-                options=available_expected_names_sorted,
-                default=current_selections,
-                key="expected_name_filter"
+                available_expected_names,
+                'expected_name_filter',
+                'expected_name_filter'
             )
         
         with col3:
@@ -682,16 +742,11 @@ try:
             current_df = get_current_filtered_dataset(exclude_filter_key='cpfs')
             available_cpfs = get_filtered_options(current_df)['cpfs']
             
-            # Preserve currently selected values
-            current_selections = st.session_state.get('cpf_filter', [])
-            all_options = list(set(available_cpfs + current_selections))
-            available_cpfs_sorted = sorted(all_options, key=lambda x: x.lower())
-            
-            selected_cpfs = st.multiselect(
+            selected_cpfs = persistent_multiselect(
                 "🔢 CPF:",
-                options=available_cpfs_sorted,
-                default=current_selections,
-                key="cpf_filter"
+                available_cpfs,
+                'cpf_filter',
+                'cpf_filter'
             )
         
         # === CONTATO ===
@@ -703,16 +758,11 @@ try:
             current_df = get_current_filtered_dataset(exclude_filter_key='phone_numbers')
             available_phone_numbers = get_filtered_options(current_df)['phone_numbers']
             
-            # Preserve currently selected values
-            current_selections = st.session_state.get('phone_filter', [])
-            all_options = list(set(available_phone_numbers + current_selections))
-            available_phone_numbers_sorted = sorted(all_options, key=lambda x: x.lower())
-            
-            selected_phone_numbers = st.multiselect(
+            selected_phone_numbers = persistent_multiselect(
                 "📞 Phone Number:",
-                options=available_phone_numbers_sorted,
-                default=current_selections,
-                key="phone_filter"
+                available_phone_numbers,
+                'phone_filter',
+                'phone_filter'
             )
         
         # === IMÓVEL ===
@@ -726,16 +776,11 @@ try:
             current_df = get_current_filtered_dataset(exclude_filter_key='bairros')
             available_bairros = get_filtered_options(current_df)['bairros']
             
-            # Preserve currently selected values
-            current_selections = st.session_state.get('bairro_filter', [])
-            all_options = list(set(available_bairros + current_selections))
-            available_bairros_sorted = sorted(all_options, key=lambda x: x.lower())
-            
-            selected_bairros = st.multiselect(
+            selected_bairros = persistent_multiselect(
                 "🗺️ Bairro:",
-                options=available_bairros_sorted,
-                default=current_selections,
-                key="bairro_filter"
+                available_bairros,
+                'bairro_filter',
+                "bairro_filter"
             )
         
         with col6:
@@ -743,16 +788,11 @@ try:
             current_df = get_current_filtered_dataset(exclude_filter_key='enderecos')
             available_enderecos = get_filtered_options(current_df)['enderecos']
             
-            # Preserve currently selected values
-            current_selections = st.session_state.get('endereco_filter', [])
-            all_options = list(set(available_enderecos + current_selections))
-            available_enderecos_sorted = sorted(all_options, key=lambda x: x.lower())
-            
-            selected_enderecos = st.multiselect(
+            selected_enderecos = persistent_multiselect(
                 "📍 Endereco:",
-                options=available_enderecos_sorted,
-                default=current_selections,
-                key="endereco_filter"
+                available_enderecos,
+                'endereco_filter',
+                "endereco_filter"
             )
         
         with col7:
@@ -760,16 +800,11 @@ try:
             current_df = get_current_filtered_dataset(exclude_filter_key='complementos')
             available_complementos = get_filtered_options(current_df)['complementos']
             
-            # Preserve currently selected values
-            current_selections = st.session_state.get('complemento_filter', [])
-            all_options = list(set(available_complementos + current_selections))
-            available_complementos_sorted = sorted(all_options, key=lambda x: x.lower())
-            
-            selected_complementos = st.multiselect(
+            selected_complementos = persistent_multiselect(
                 "🚪 Complemento:",
-                options=available_complementos_sorted,
-                default=current_selections,
-                key="complemento_filter"
+                available_complementos,
+                'complemento_filter',
+                "complemento_filter"
             )
         
         # === QUALIFICAÇÃO ===
@@ -783,16 +818,11 @@ try:
             current_df = get_current_filtered_dataset(exclude_filter_key='classificacoes')
             available_classificacoes = get_filtered_options(current_df)['classificacoes']
             
-            # Preserve currently selected values
-            current_selections = st.session_state.get('classificacao_filter', [])
-            all_options = list(set(available_classificacoes + current_selections))
-            available_classificacoes_sorted = sorted(all_options, key=lambda x: x.lower())
-            
-            selected_classificacoes = st.multiselect(
+            selected_classificacoes = persistent_multiselect(
                 "✅ Classificação:",
-                options=available_classificacoes_sorted,
-                default=current_selections,
-                key="classificacao_filter"
+                available_classificacoes,
+                'classificacao_filter',
+                "classificacao_filter"
             )
         
         with col9:
@@ -800,16 +830,11 @@ try:
             current_df = get_current_filtered_dataset(exclude_filter_key='statuses')
             available_statuses = get_filtered_options(current_df)['statuses']
             
-            # Preserve currently selected values
-            current_selections = st.session_state.get('status_filter', [])
-            all_options = list(set(available_statuses + current_selections))
-            available_statuses_sorted = sorted(all_options, key=lambda x: x.lower())
-            
-            selected_statuses = st.multiselect(
+            selected_statuses = persistent_multiselect(
                 "🎯 Status:",
-                options=available_statuses_sorted,
-                default=current_selections,
-                key="status_filter"
+                available_statuses,
+                'status_filter',
+                "status_filter"
             )
         
         # === CONVERSA ===
@@ -817,19 +842,19 @@ try:
         col_conv1, col_conv2 = st.columns(2)
         
         with col_conv1:
-            only_unarchived = st.checkbox(
+            only_unarchived = persistent_checkbox(
                 "📁 Apenas não arquivadas",
-                value=False,
-                key="only_unarchived_filter",
-                help="Mostrar apenas conversas não arquivadas"
+                'only_unarchived_filter',
+                "only_unarchived_filter",
+                "Mostrar apenas conversas não arquivadas"
             )
         
         with col_conv2:
-            only_unread = st.checkbox(
+            only_unread = persistent_checkbox(
                 "👁️ Apenas não lidas",
-                value=False,
-                key="only_unread_filter",
-                help="Mostrar apenas conversas com mensagens não lidas"
+                'only_unread_filter',
+                "only_unread_filter",
+                "Mostrar apenas conversas com mensagens não lidas"
             )
         
         # === ACTIONS & METRICS ===
@@ -839,7 +864,21 @@ try:
         with col10:
             # Clear filters button
             if st.button("🗑️ Clear All Filters", type="secondary"):
-                # Clear all filter widget states
+                # Reset persistent filter state
+                st.session_state.conversations_filter_state = {
+                    'display_name_filter': [],
+                    'phone_filter': [],
+                    'expected_name_filter': [],
+                    'cpf_filter': [],
+                    'classificacao_filter': [],
+                    'bairro_filter': [],
+                    'status_filter': [],
+                    'endereco_filter': [],
+                    'complemento_filter': [],
+                    'only_unarchived_filter': False,
+                    'only_unread_filter': False
+                }
+                # Also clear widget states
                 for key in ['display_name_filter', 'phone_filter', 'expected_name_filter', 'cpf_filter',
                            'classificacao_filter', 'bairro_filter', 'status_filter', 'endereco_filter', 'complemento_filter',
                            'only_unarchived_filter', 'only_unread_filter']:
@@ -1036,7 +1075,14 @@ try:
                     st.session_state.processor_conversation_id = st.session_state.selected_conversation_id
                     st.session_state.processor_conversation_data = selected_conv_info.to_dict()
                     
-                    # Navigate to Processor page using Streamlit's page navigation
+                    # Get conversation_id for URL parameter
+                    conversation_id = st.session_state.selected_conversation_id
+                    
+                    # Store conversation_id for URL update after navigation
+                    if conversation_id:
+                        st.session_state.pending_conversation_id = conversation_id
+                    
+                    # Navigate to Processor page
                     st.switch_page("pages/Processor.py")
             else:
                 st.warning("Selected conversation not found in current filter. Please reselect.")
@@ -1048,8 +1094,7 @@ try:
             # Add toggle for map loading
             col1, col2 = st.columns([3, 1])
             with col1:
-                st.subheader("🗺️ Mapa de Propriedades")
-                st.write(f"Visualizar propriedades dos {len(filtered_df)} contatos filtrados no mapa")
+                pass  # Removed title as requested
             
             with col2:
                 # Use session state to control map loading
