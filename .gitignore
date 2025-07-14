@@ -13,6 +13,7 @@ test.py
 
 # Claude Code IDE configuration (local only)
 .claude/
+CLAUDE.md
 
 # Temporary analysis files
 analysis_temp/
@@ -20,6 +21,7 @@ analysis_temp/
 # Security - API Keys and Secrets
 .secrets.toml
 secrets.toml
+.secrets.json
 *.key
 *.pem
 .env.local

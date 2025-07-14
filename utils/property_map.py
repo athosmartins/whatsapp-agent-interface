@@ -447,8 +447,16 @@ def render_property_map_streamlit(
             show_legend = st.session_state.get("advanced_show_legend", True)
             show_tooltips = st.session_state.get("advanced_show_tooltips", True)
             # Note: show_property_info not used in current implementation
+            # Check if STATUS CONTATO column exists, otherwise default to "Índice Sequencial"
+            default_color_column = "Índice Sequencial"
+            if properties_with_geometry:
+                # Check if STATUS CONTATO exists in the properties
+                sample_prop = properties_with_geometry[0]
+                if "STATUS CONTATO" in sample_prop:
+                    default_color_column = "STATUS CONTATO"
+            
             color_by_column = st.session_state.get(
-                "advanced_color_by_column", "Índice Sequencial"
+                "advanced_color_by_column", default_color_column
             )
             column_name_mapping = {}
             selected_tooltip_fields = st.session_state.get(
@@ -848,9 +856,8 @@ def render_property_map_streamlit(
             """
             m.get_root().html.add_child(folium.Element(legend_html))
 
-        # Render map in Streamlit with full width and increased height
-        # (50% more than 400 = 600)
-        map_data = st_folium.st_folium(m, use_container_width=True, height=1000)
+        # Render map in Streamlit with full width and reasonable height
+        map_data = st_folium.st_folium(m, use_container_width=True, height=600)
         
         # Debug: Show current map state
         if st.session_state.get('debug_mode', False):
@@ -867,8 +874,20 @@ def render_property_map_streamlit(
                 st.write(f"   - East: {bounds['_northEast']['lng']:.6f}")
                 st.write(f"   - West: {bounds['_southWest']['lng']:.6f}")
 
-        # Advanced options button below the map
+        # Advanced options button below the map (with reduced spacing)
         if advanced_options_enabled:
+            # Add custom CSS to reduce spacing
+            st.markdown(
+                """
+                <style>
+                .stButton > button {
+                    margin-top: -20px !important;
+                }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+            
             if st.button("🛠️ Opções Avançadas do Mapa"):
                 st.session_state.show_advanced_options = not (
                     st.session_state.get("show_advanced_options", False)
@@ -992,11 +1011,16 @@ def render_property_map_streamlit(
                     [col for col in all_columns if col not in excluded_columns]
                 )
                 color_options = ["Índice Sequencial"] + available_columns
+                
+                # Set default index based on STATUS CONTATO availability
+                default_index = 0
+                if "STATUS CONTATO" in available_columns:
+                    default_index = color_options.index("STATUS CONTATO")
 
                 st.selectbox(
                     "🎨 Colorir por:",
                     options=color_options,
-                    index=0,
+                    index=default_index,
                     key="advanced_color_by_column",
                     help="Escolha uma coluna para colorir as propriedades",
                 )
@@ -1055,27 +1079,6 @@ def render_property_map_streamlit(
                         ),
                     )
 
-                # Column information section
-                with st.expander("🔍 Informações das Colunas", expanded=False):
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.write("**Colunas Disponíveis:**")
-                        for col in sorted(all_columns):
-                            if col not in {"GEOMETRY", "geometry", "id", "ID", "_id"}:
-                                st.write(f"• {col}")
-
-                    with col2:
-                        st.write("**Exemplo de Dados:**")
-                        if properties_with_geometry:
-                            sample_prop = properties_with_geometry[0]
-                            for key, value in sample_prop.items():
-                                if key not in {"GEOMETRY", "geometry"}:
-                                    display_value = (
-                                        str(value)[:50] + "..."
-                                        if len(str(value)) > 50
-                                        else str(value)
-                                    )
-                                    st.write(f"**{key}**: {display_value}")
 
                 # Apply button to refresh map with new settings
                 col1, col2 = st.columns([1, 3])

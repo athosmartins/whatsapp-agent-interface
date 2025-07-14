@@ -100,7 +100,7 @@ The system includes comprehensive property data integration via the mega_data_se
 ## Development Guidelines
 
 ### File Organization
-- **Temporary/Analysis Files**: Store all debug, analysis, and temporary files that are not needed for production in the `analysis_temp/` folder
+- **Temporary/Analysis/Debug/Test Files**: Store all debug, analysis, and temporary files that are not needed for production in the `analysis_temp/` folder, never create them on the root or any other folder.
 - **Production Files**: Keep only essential files in the main directory structure
 - **Testing**: Always test solutions thoroughly before confirming they work
 

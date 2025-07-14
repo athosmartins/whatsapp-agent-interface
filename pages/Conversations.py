@@ -333,12 +333,14 @@ def show_filtered_conversations_map(filtered_df):
                 st.write(
                     f"   {i+1}. {prop.get('ENDERECO', 'N/A')} - Geometry: {len(str(prop.get('GEOMETRY', '')))}"
                 )
-            
+
             # Debug map settings
             st.write("🗺️ Map Debug Info:")
             st.write(f"   - Default Zoom Level: 16")
             st.write(f"   - Total Properties: {len(all_properties)}")
-            st.write(f"   - Properties with Geometry: {len([p for p in all_properties if p.get('GEOMETRY')])}")
+            st.write(
+                f"   - Properties with Geometry: {len([p for p in all_properties if p.get('GEOMETRY')])}"
+            )
 
         # Add a container to isolate the map rendering
         map_container = st.container()
@@ -1061,7 +1063,6 @@ try:
             )
 
         # === ACTIONS & METRICS ===
-        st.markdown("### ⚙️ Ações")
         col10, col11, col12 = st.columns(3)
 
         with col10:
@@ -1383,7 +1384,7 @@ try:
 
                 if not st.session_state[f"map_loaded_{len(filtered_df)}"]:
                     load_map = st.button(
-                        "🚀 Carregar Mapa",
+                        "🗺️ Carregar Mapa",
                         type="primary",
                         help=f"Carregar mapa com propriedades dos contatos filtrados (máx {200 if len(filtered_df) > 200 else len(filtered_df)} contatos)",
                     )

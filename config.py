@@ -6,7 +6,46 @@ Application constants for the WhatsApp Agent Streamlit interface:
 – preset responses
 – standby reasons
 – Urb.Link status options
+– Hex API configuration
 """
+
+import os
+
+# Hex API Configuration
+HEX_API_BASE_URL = 'https://app.hex.tech/api/v1'
+HEX_PROJECT_ID_PBH = 'fee83bcb-80e8-4b56-9a06-ebf71e0e902e'
+HEX_PROJECT_ID_LOCALIZE = 'e8e789bf-4844-4301-b16c-631a582ad416'
+HEX_PROJECT_ID_MAIS_TELEFONES = '01964feb-a827-7008-b68d-940e0cd7ae9a'
+HEX_PROJECT_ID_PESSOAS_REFERENCIA = '0196504b-b2ca-7009-9b52-4e946809e803'
+HEX_PROJECT_ID_VOXUY = '019659de-7608-7111-9a73-5611ede14b10'
+
+# Try to get API token from multiple sources (in order of preference)
+def get_hex_api_token():
+    # 1. Environment variable (most secure)
+    token = os.getenv('HEX_API_SECRET')
+    if token:
+        return token
+    
+    # 2. Streamlit secrets (for Streamlit Cloud)
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets') and 'HEX_API_SECRET' in st.secrets:
+            return st.secrets['HEX_API_SECRET']
+    except:
+        pass
+    
+    # 3. Local secrets file (fallback for development)
+    try:
+        import json
+        with open('.secrets.json', 'r') as f:
+            secrets = json.load(f)
+            return secrets.get('HEX_API_SECRET', '')
+    except:
+        pass
+    
+    return ''
+
+HEX_API_TOKEN = get_hex_api_token()
 
 CLASSIFICACAO_OPTS = [
     "Proprietário",
