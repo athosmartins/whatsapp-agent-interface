@@ -64,7 +64,7 @@ HEX_CONFIGS = {
     "consultar_localize": {
         "project_id": HEX_PROJECT_ID_LOCALIZE,
         "input_params": lambda df: {"assertiva_input": df.to_csv(index=False)},
-        "button_text": "📍 Consultar Localize [Assertiva]",
+        "button_text": "📍 Localize [Assertiva]",
         "success_message": "Localize",
         "session_key": "localize_last_run_url",
         "link_text": "Abrir Localize no Hex"

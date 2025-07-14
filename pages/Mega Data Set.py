@@ -11,7 +11,7 @@ try:
         get_property_summary_stats,
     )
     from utils.property_map import render_property_map_streamlit
-    from services.hex_api import render_hex_button
+    from services.hex_api import render_hex_dropdown_interface
 except ImportError as e:
     st.error(f"❌ Error importing modules: {e}")
     st.info(
@@ -288,7 +288,7 @@ def render_dynamic_filters(df):
     for i, filter_config in enumerate(
         st.session_state.mega_data_filter_state["dynamic_filters"]
     ):
-        with st.expander(f"🔍 Filtro {i+1}", expanded=True):
+        with st.expander(f"Filtro {i+1}", expanded=True):
             col1, col2, col3, col4 = st.columns([3, 2, 3, 1])
 
             with col1:
@@ -548,9 +548,9 @@ def render_dynamic_filters(df):
         <style>
         .update-button > button {
             width: 100% !important;
-            background-color: #D4EDDA !important;
-            color: #155724 !important;
-            border: 1px solid #C3E6CB !important;
+            background-color: #F8D7DA !important;
+            color: #721C24 !important;
+            border: 1px solid #F5C6CB !important;
             border-radius: 6px !important;
             padding: 0.5rem 1rem !important;
             font-size: 14px !important;
@@ -558,8 +558,8 @@ def render_dynamic_filters(df):
             text-align: center !important;
         }
         .update-button > button:hover {
-            background-color: #C3E6CB !important;
-            border-color: #B8E3C1 !important;
+            background-color: #F5C6CB !important;
+            border-color: #F1B0B7 !important;
         }
         </style>
         """
@@ -635,7 +635,7 @@ try:
     # Filter section
 
     # Bairro filter with cascading (integrated into main filter area)
-    col1, col2 = st.columns([3, 1])
+    col1, col2 = st.columns([1, 2])
 
     with col1:
         # Get current selections first
@@ -766,26 +766,8 @@ try:
             f"{len(filtered_df):,} propriedades filtradas"
         )
 
-        # Button rows - 2x3 grid (first row has 2 buttons, second row has 3)
-        col1, col2 = st.columns(2)
-
-        with col1:
-            render_hex_button(filtered_df, "descobrir_proprietario")
-
-        with col2:
-            render_hex_button(filtered_df, "consultar_localize")
-
-        # Second row of buttons - 3 columns
-        col3, col4, col5 = st.columns(3)
-
-        with col3:
-            render_hex_button(filtered_df, "mais_telefones")
-
-        with col4:
-            render_hex_button(filtered_df, "pessoas_referencia")
-
-        with col5:
-            render_hex_button(filtered_df, "mandar_voxuy", funnel="mega_data_set")
+        # Dropdown interface
+        render_hex_dropdown_interface(filtered_df, funnel="mega_data_set")
 
     # Map section
     st.markdown("---")
