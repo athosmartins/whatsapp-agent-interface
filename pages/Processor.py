@@ -238,7 +238,7 @@ DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
 display_preloader_status()
 
 # LOGIN_ENABLED flag - can be controlled via environment variable or hardcoded
-LOGIN_ENABLED = True  # Default value
+LOGIN_ENABLED = False  # Default value - disabled for production
 
 HIGHLIGHT_ENABLE = False
 
