@@ -35,6 +35,14 @@ DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
 # Production environment detection
 IS_PRODUCTION = os.getenv("STREAMLIT_SERVER_HEADLESS") == "true"
 
+# Add live RAM counter for debugging
+import os
+current_process = psutil.Process(os.getpid())
+ram_mb = current_process.memory_info().rss / 1e6
+st.sidebar.write(f"🖥️ RAM: {ram_mb:.0f} MB")
+if ram_mb > 2000:
+    st.sidebar.error(f"⚠️ High RAM usage: {ram_mb:.0f} MB")
+
 # Enhanced debugging functions
 def log_system_info():
     """Log comprehensive system information for debugging."""
@@ -698,53 +706,73 @@ def get_summary_stats():
     return get_property_summary_stats()
 
 
-# Load data with production protection and enhanced debugging
-try:
-    monitor_memory_usage("before_data_loading")
-    print(f"Starting mega data load at {datetime.now().isoformat()}")
-    
-    with st.spinner("Carregando Mega Data Set..."):
-        # PRODUCTION: Add timeout protection for Streamlit Cloud
-        if IS_PRODUCTION:
-            print("PRODUCTION MODE: Using conservative data loading approach")
-            # Use a more conservative approach in production
-            try:
-                mega_df = load_mega_data()
-                monitor_memory_usage("after_production_data_load")
-            except Exception as load_error:
-                log_error_with_context(load_error, "Production data loading failed")
-                st.error("❌ Erro ao carregar dados do Google Drive em produção")
-                st.info("Usando dados de exemplo para demonstração")
-                # Create a minimal sample dataset to prevent total failure
-                mega_df = pd.DataFrame({
-                    'BAIRRO': ['Savassi', 'Funcionários', 'Centro'],
-                    'ENDERECO': ['Rua A', 'Rua B', 'Rua C'],
-                    'GEOMETRY': ['POINT(-43.1 -19.9)', 'POINT(-43.2 -19.8)', 'POINT(-43.0 -19.7)']
-                })
-                monitor_memory_usage("after_fallback_data_creation")
-        else:
-            print("DEVELOPMENT MODE: Loading full dataset")
-            mega_df = load_mega_data()
-            monitor_memory_usage("after_dev_data_load")
+# PRODUCTION FIX: Prevent immediate data loading to avoid OOM
+mega_df = None
 
-    if mega_df.empty:
-        st.error("❌ Nenhum dado encontrado no Mega Data Set.")
-        st.info(
-            "Verifique se o arquivo está disponível no Google Drive ou configurado localmente."
-        )
+# Show data loading controls
+st.info("🚀 **Clique em 'Carregar Dados' para começar** (evita crash de memória)")
+
+col1, col2 = st.columns([1, 3])
+with col1:
+    load_data_btn = st.button("📊 Carregar Dados", type="primary")
+
+if load_data_btn or not IS_PRODUCTION:
+    # Load data with production protection and enhanced debugging
+    try:
+        monitor_memory_usage("before_data_loading")
+        print(f"Starting mega data load at {datetime.now().isoformat()}")
+        
+        with st.spinner("Carregando Mega Data Set..."):
+            # PRODUCTION: Add timeout protection for Streamlit Cloud
+            if IS_PRODUCTION:
+                print("PRODUCTION MODE: Using conservative data loading approach")
+                # Use a more conservative approach in production
+                try:
+                    mega_df = load_mega_data()
+                    monitor_memory_usage("after_production_data_load")
+                except Exception as load_error:
+                    log_error_with_context(load_error, "Production data loading failed")
+                    st.error("❌ Erro ao carregar dados do Google Drive em produção")
+                    st.info("Usando dados de exemplo para demonstração")
+                    # Create a minimal sample dataset to prevent total failure
+                    mega_df = pd.DataFrame({
+                        'BAIRRO': ['Savassi', 'Funcionários', 'Centro'],
+                        'ENDERECO': ['Rua A', 'Rua B', 'Rua C'],
+                        'GEOMETRY': ['POINT(-43.1 -19.9)', 'POINT(-43.2 -19.8)', 'POINT(-43.0 -19.7)']
+                    })
+                    monitor_memory_usage("after_fallback_data_creation")
+            else:
+                print("DEVELOPMENT MODE: Loading full dataset")
+                mega_df = load_mega_data()
+                monitor_memory_usage("after_dev_data_load")
+
+        if mega_df.empty:
+            st.error("❌ Nenhum dado encontrado no Mega Data Set.")
+            st.info(
+                "Verifique se o arquivo está disponível no Google Drive ou configurado localmente."
+            )
+            st.stop()
+
+        st.success(f"✅ Loaded {len(mega_df):,} registros do Mega Data Set")
+    except Exception as e:
+        log_error_with_context(e, "Critical error during data loading")
+        st.error(f"❌ Erro crítico: {e}")
         st.stop()
 
-    st.write(f"✅ Loaded {len(mega_df):,} registros do Mega Data Set")
+# Only proceed if data is loaded
+if mega_df is None:
+    st.info("👆 Clique em 'Carregar Dados' acima para continuar")
+    st.stop()
 
-    # Show summary statistics
-    if DEBUG:
-        st.sidebar.write("**Estatísticas do Mega Data Set:**")
-        stats = get_summary_stats()
-        for key, value in stats.items():
-            if isinstance(value, dict):
-                st.sidebar.write(f"**{key}**: {len(value)} únicos")
-            else:
-                st.sidebar.write(f"**{key}**: {value:,}")
+# Show summary statistics
+if DEBUG:
+    st.sidebar.write("**Estatísticas do Mega Data Set:**")
+    stats = get_summary_stats()
+    for key, value in stats.items():
+        if isinstance(value, dict):
+            st.sidebar.write(f"**{key}**: {len(value)} únicos")
+        else:
+            st.sidebar.write(f"**{key}**: {value:,}")
 
     # Get unique bairros for filter
     bairro_col = None

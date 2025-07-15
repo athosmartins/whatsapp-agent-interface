@@ -77,6 +77,22 @@ def load_compressed_json(file_path):
             if rows:
                 df = pd.DataFrame(rows)
                 print(f"Created DataFrame: {len(df)} rows × {len(df.columns)} columns")
+                
+                # PRODUCTION: Memory optimization for large datasets
+                if len(df) > 100000:
+                    print("PRODUCTION: Applying memory optimizations for large dataset")
+                    # Convert string columns to category where beneficial
+                    for col in df.columns:
+                        if df[col].dtype == 'object':
+                            unique_ratio = df[col].nunique() / len(df)
+                            if unique_ratio < 0.1:  # Less than 10% unique values
+                                df[col] = df[col].astype('category')
+                                print(f"  Converted {col} to category (saved memory)")
+                    
+                    # Force garbage collection
+                    import gc
+                    gc.collect()
+                
                 return df
             else:
                 print("No valid data found in compressed file")
