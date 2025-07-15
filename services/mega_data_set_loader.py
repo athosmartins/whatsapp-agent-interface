@@ -24,6 +24,7 @@ _cache_timestamp = 0
 def download_latest_mega_data_set() -> Optional[str]:
     """
     Download the latest mega_data_set file from Google Drive folder using Google Drive API.
+    Prioritizes Parquet files over CSV for better performance.
     Returns the path to the downloaded file or None if failed.
     """
     try:
@@ -104,8 +105,22 @@ def download_latest_mega_data_set() -> Optional[str]:
             print("No files found in mega_data_set folder")
             return None
         
-        # Get the newest file (first in the list due to orderBy='createdTime desc')
-        newest_file = files[0]
+        # Prioritize Parquet files over CSV for better performance
+        parquet_files = [f for f in files if f['name'].lower().endswith('.parquet')]
+        csv_files = [f for f in files if f['name'].lower().endswith('.csv')]
+        
+        if parquet_files:
+            newest_file = parquet_files[0]  # Already sorted by creation time
+            file_extension = '.parquet'
+            print(f"Using Parquet file for optimal performance: {newest_file['name']}")
+        elif csv_files:
+            newest_file = csv_files[0]
+            file_extension = '.csv'
+            print(f"Using CSV file: {newest_file['name']}")
+        else:
+            print("No supported file formats found (looking for .parquet or .csv)")
+            return None
+        
         file_id = newest_file['id']
         file_name = newest_file['name']
         
@@ -114,8 +129,8 @@ def download_latest_mega_data_set() -> Optional[str]:
         # Download the file
         request = drive_service.files().get_media(fileId=file_id)
         
-        # Create local file path with timestamp
-        local_path = f"/tmp/mega_data_set_{int(time.time())}.csv"
+        # Create local file path with timestamp and correct extension
+        local_path = f"/tmp/mega_data_set_{int(time.time())}{file_extension}"
         
         # Download with progress tracking
         with open(local_path, 'wb') as local_file:
@@ -211,21 +226,28 @@ def load_mega_data_set() -> pd.DataFrame:
                     return pd.DataFrame()
     
     try:
-        # Try different encodings
-        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
-        df = None
-        
-        for encoding in encodings:
-            try:
-                df = pd.read_csv(file_path, encoding=encoding, low_memory=False)
-                print(f"Successfully loaded mega_data_set with {encoding} encoding")
-                break
-            except UnicodeDecodeError:
-                continue
-        
-        if df is None:
-            print("Failed to load mega_data_set with any encoding")
-            return pd.DataFrame()
+        # Load based on file extension
+        if file_path.lower().endswith('.parquet'):
+            print("Loading Parquet file...")
+            df = pd.read_parquet(file_path)
+            print(f"Successfully loaded mega_data_set from Parquet file")
+        else:
+            # Try different encodings for CSV
+            print("Loading CSV file...")
+            encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+            df = None
+            
+            for encoding in encodings:
+                try:
+                    df = pd.read_csv(file_path, encoding=encoding, low_memory=False)
+                    print(f"Successfully loaded mega_data_set with {encoding} encoding")
+                    break
+                except UnicodeDecodeError:
+                    continue
+            
+            if df is None:
+                print("Failed to load mega_data_set with any encoding")
+                return pd.DataFrame()
         
         # Cache the data
         _cached_mega_data = df

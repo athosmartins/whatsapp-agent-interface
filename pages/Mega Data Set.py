@@ -6,6 +6,10 @@ from datetime import datetime
 import time
 import os
 import gc  # Garbage collection for memory management
+import traceback
+import psutil  # For memory monitoring
+import logging
+from pathlib import Path
 
 try:
     from services.mega_data_set_loader import (
@@ -27,6 +31,101 @@ st.title("🏢 Mega Data Set")
 
 # Debug mode check
 DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
+
+# Production environment detection
+IS_PRODUCTION = os.getenv("STREAMLIT_SERVER_HEADLESS") == "true"
+
+# Enhanced debugging functions
+def log_system_info():
+    """Log comprehensive system information for debugging."""
+    try:
+        # Memory info
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        info = {
+            "timestamp": datetime.now().isoformat(),
+            "environment": "PRODUCTION" if IS_PRODUCTION else "DEVELOPMENT",
+            "memory_total_mb": round(memory.total / (1024**2), 1),
+            "memory_available_mb": round(memory.available / (1024**2), 1),
+            "memory_percent_used": memory.percent,
+            "disk_total_gb": round(disk.total / (1024**3), 1),
+            "disk_free_gb": round(disk.free / (1024**3), 1),
+            "disk_percent_used": round((disk.used / disk.total) * 100, 1),
+            "python_version": f"{os.sys.version_info.major}.{os.sys.version_info.minor}.{os.sys.version_info.micro}",
+        }
+        
+        if DEBUG or IS_PRODUCTION:
+            st.sidebar.write("🖥️ **System Info:**")
+            for key, value in info.items():
+                if "memory" in key or "disk" in key:
+                    st.sidebar.write(f"  {key}: {value}")
+        
+        return info
+    except Exception as e:
+        error_msg = f"Error logging system info: {e}"
+        if DEBUG:
+            st.sidebar.error(error_msg)
+        print(error_msg)
+        return {"error": str(e)}
+
+def log_error_with_context(error, context="", show_user=True):
+    """Log errors with full context for debugging."""
+    error_info = {
+        "timestamp": datetime.now().isoformat(),
+        "environment": "PRODUCTION" if IS_PRODUCTION else "DEVELOPMENT",
+        "context": context,
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+        "traceback": traceback.format_exc(),
+    }
+    
+    # Always log to console
+    print(f"\n=== ERROR LOG ===")
+    print(f"Time: {error_info['timestamp']}")
+    print(f"Environment: {error_info['environment']}")
+    print(f"Context: {error_info['context']}")
+    print(f"Error: {error_info['error_type']}: {error_info['error_message']}")
+    if DEBUG:
+        print(f"Traceback:\n{error_info['traceback']}")
+    print(f"=== END ERROR LOG ===\n")
+    
+    # Show to user if requested
+    if show_user:
+        st.error(f"❌ {context}: {error_info['error_type']}: {error_info['error_message']}")
+        if DEBUG:
+            st.code(error_info['traceback'])
+    
+    return error_info
+
+def monitor_memory_usage(operation_name):
+    """Monitor memory usage during operations."""
+    try:
+        memory = psutil.virtual_memory()
+        usage_mb = round((memory.total - memory.available) / (1024**2), 1)
+        percent = memory.percent
+        
+        log_msg = f"Memory during {operation_name}: {usage_mb}MB ({percent}%)"
+        print(log_msg)
+        
+        if DEBUG:
+            st.sidebar.write(f"📊 {log_msg}")
+        
+        # Warning if memory usage is high
+        if percent > 80:
+            warning_msg = f"⚠️ High memory usage during {operation_name}: {percent}%"
+            print(warning_msg)
+            if DEBUG:
+                st.warning(warning_msg)
+        
+        return {"usage_mb": usage_mb, "percent": percent}
+    except Exception as e:
+        print(f"Error monitoring memory for {operation_name}: {e}")
+        return {"error": str(e)}
+
+# Log system info at startup
+log_system_info()
+monitor_memory_usage("page_startup")
 
 # Initialize session state for filters
 if "mega_data_filter_state" not in st.session_state:
@@ -599,15 +698,21 @@ def get_summary_stats():
     return get_property_summary_stats()
 
 
-# Load data with production protection
+# Load data with production protection and enhanced debugging
 try:
+    monitor_memory_usage("before_data_loading")
+    print(f"Starting mega data load at {datetime.now().isoformat()}")
+    
     with st.spinner("Carregando Mega Data Set..."):
         # PRODUCTION: Add timeout protection for Streamlit Cloud
-        if os.getenv("STREAMLIT_SERVER_HEADLESS") == "true":
+        if IS_PRODUCTION:
+            print("PRODUCTION MODE: Using conservative data loading approach")
             # Use a more conservative approach in production
             try:
                 mega_df = load_mega_data()
+                monitor_memory_usage("after_production_data_load")
             except Exception as load_error:
+                log_error_with_context(load_error, "Production data loading failed")
                 st.error("❌ Erro ao carregar dados do Google Drive em produção")
                 st.info("Usando dados de exemplo para demonstração")
                 # Create a minimal sample dataset to prevent total failure
@@ -616,10 +721,11 @@ try:
                     'ENDERECO': ['Rua A', 'Rua B', 'Rua C'],
                     'GEOMETRY': ['POINT(-43.1 -19.9)', 'POINT(-43.2 -19.8)', 'POINT(-43.0 -19.7)']
                 })
-                if DEBUG:
-                    st.exception(load_error)
+                monitor_memory_usage("after_fallback_data_creation")
         else:
+            print("DEVELOPMENT MODE: Loading full dataset")
             mega_df = load_mega_data()
+            monitor_memory_usage("after_dev_data_load")
 
     if mega_df.empty:
         st.error("❌ Nenhum dado encontrado no Mega Data Set.")
@@ -716,12 +822,18 @@ try:
         )
     ]
 
-    # Apply filters with logic
+    # Apply filters with logic and monitor performance
+    monitor_memory_usage("before_filter_application")
+    print(f"Applying {len(active_dynamic_filters)} dynamic filters to {len(current_filtered_df)} records")
+    
     try:
         current_filtered_df = apply_dynamic_filters_with_logic(
             current_filtered_df, dynamic_filters, filter_logic
         )
+        monitor_memory_usage("after_filter_application")
+        print(f"Filter application completed, {len(current_filtered_df)} records remaining")
     except Exception as e:
+        log_error_with_context(e, f"Dynamic filter application failed with {len(active_dynamic_filters)} filters")
         st.error(f"Erro ao aplicar filtros dinâmicos: {e}")
 
     # Store the last applied state in session state if this is the first load or if update was requested
@@ -890,6 +1002,9 @@ try:
                 time_text.text(f"⏱️ Tempo decorrido: {elapsed_time:.1f}s")
 
                 # Render the map (this is where the actual time is spent)
+                monitor_memory_usage("before_map_rendering")
+                print(f"Starting map rendering with {len(valid_properties)} properties")
+                
                 try:
                     render_property_map_streamlit(
                         valid_properties,
@@ -897,12 +1012,15 @@ try:
                         enable_extra_options=True,
                         enable_style_selector=False,
                     )
+                    monitor_memory_usage("after_successful_map_rendering")
+                    print("Map rendering completed successfully")
+                    
                 except Exception as map_error:
+                    monitor_memory_usage("after_failed_map_rendering")
+                    log_error_with_context(map_error, f"Map rendering failed with {len(valid_properties)} properties")
                     progress_bar.progress(1.0)
                     progress_text.text("❌ Erro ao renderizar mapa")
                     st.error(f"Erro ao renderizar mapa: {str(map_error)}")
-                    if DEBUG:
-                        st.exception(map_error)
                     st.stop()
 
                 # Complete progress after map is rendered
@@ -994,6 +1112,8 @@ try:
             st.warning("⚠️ Nenhuma coluna encontrada para exibição")
 
 except Exception as e:
+    monitor_memory_usage("during_critical_error")
+    log_error_with_context(e, "Critical error in Mega Data Set page", show_user=False)
     st.error(f"❌ Erro ao carregar dados: {str(e)}")
     if DEBUG:
         st.exception(e)

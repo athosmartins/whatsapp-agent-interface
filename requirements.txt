@@ -10,3 +10,5 @@ folium>=0.14.0
 streamlit-folium>=0.13.0
 numpy<2.0.0
 requests
+pyarrow>=10.0.0
+psutil>=5.9.0
