@@ -13,7 +13,7 @@ import json
 import duckdb
 
 # Google Drive folder ID for mega_data_set files
-MEGA_DATA_SET_FOLDER_ID = "1yFhxSOAf9UdarCekCKCg1UqKl3MArZAp"
+MEGA_DATA_SET_FOLDER_ID = "1yfGnHjmaEOCbrEcYLXaVcW5_bmvzU98l"
 CACHE_DURATION = 3600  # 1 hour in seconds
 
 # CONFIGURATION: Set the path to your real mega_data_set file here
@@ -279,7 +279,7 @@ def load_mega_data_set() -> pd.DataFrame:
         if not file_path:
             print("⚠️  WARNING: No mega_data_set file found!")
             print("📋 To use the REAL mega_data_set with 350k+ rows:")
-            print("   1. Download the latest file from Google Drive folder ID: 1yFhxSOAf9UdarCekCKCg1UqKl3MArZAp")
+            print("   1. Download the latest file from Google Drive folder ID: 1yfGnHjmaEOCbrEcYLXaVcW5_bmvzU98l")
             print("   2. Save it as one of these file paths:")
             for path in potential_paths:
                 print(f"      - {path}")
@@ -953,7 +953,20 @@ def _ensure_parquet_file() -> bool:
         print("Parquet file already exists")
         return True
         
-    # Skip Google Drive access to avoid widget issues
-    print("Skipping Google Drive access to prevent login issues")
-    print("Parquet file not found, will use fallback data")
-    return False
+    # Try to convert JSON.GZ to Parquet for DuckDB compatibility
+    try:
+        print("Attempting to convert JSON.GZ to Parquet...")
+        df = load_mega_data_set()  # This will load the JSON.GZ file
+        
+        if not df.empty:
+            print(f"Converting {len(df):,} rows to Parquet format...")
+            df.to_parquet(PARQUET_FILE)
+            print("Successfully converted JSON.GZ to Parquet")
+            return True
+        else:
+            print("Failed to load data for conversion")
+            return False
+            
+    except Exception as e:
+        print(f"Error converting JSON.GZ to Parquet: {e}")
+        return False
