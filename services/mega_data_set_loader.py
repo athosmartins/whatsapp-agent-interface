@@ -850,6 +850,14 @@ def get_slice(offset=0, limit=20000):
 # Global parquet file path (downloaded once)
 PARQUET_FILE = "/tmp/mega_data_set.parquet"
 
+# Clear parquet file on startup to ensure fresh conversion
+if os.path.exists(PARQUET_FILE):
+    try:
+        os.remove(PARQUET_FILE)
+        print("Cleared existing parquet file for fresh conversion")
+    except:
+        pass
+
 def list_bairros_optimized():
     """Get list of available bairros using DuckDB predicate push-down with fallbacks."""
     try:
@@ -953,20 +961,50 @@ def _ensure_parquet_file() -> bool:
         print("Parquet file already exists")
         return True
         
-    # Try to convert JSON.GZ to Parquet for DuckDB compatibility
+    # Try to convert JSON.GZ to Parquet for DuckDB compatibility using streaming
     try:
-        print("Attempting to convert JSON.GZ to Parquet...")
-        df = load_mega_data_set()  # This will load the JSON.GZ file
+        print("Attempting to convert JSON.GZ to Parquet using streaming...")
         
-        if not df.empty:
-            print(f"Converting {len(df):,} rows to Parquet format...")
-            df.to_parquet(PARQUET_FILE)
-            print("Successfully converted JSON.GZ to Parquet")
-            return True
-        else:
-            print("Failed to load data for conversion")
+        # Download the JSON.GZ file first
+        file_path = download_latest_mega_data_set()
+        if not file_path or not file_path.lower().endswith('.json.gz'):
+            print("No JSON.GZ file found for conversion")
             return False
-            
+        
+        # Use DuckDB to convert JSON.GZ directly to Parquet without loading into memory
+        print(f"Converting JSON.GZ to Parquet using DuckDB streaming...")
+        
+        # Create a temporary JSON file from the compressed one for DuckDB
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_json:
+            tmp_json_path = tmp_json.name
+        
+        # Decompress JSON.GZ to temporary JSON file
+        with gzip.open(file_path, 'rt', encoding='utf-8') as f_in:
+            with open(tmp_json_path, 'w', encoding='utf-8') as f_out:
+                # Skip metadata lines and write only JSON lines
+                for line in f_in:
+                    if line.startswith('###'):
+                        continue
+                    if line.strip() and not line.startswith('#'):
+                        f_out.write(line)
+        
+        # Use DuckDB to convert JSON to Parquet
+        print("Converting JSON to Parquet using DuckDB...")
+        duckdb.sql(f"""
+            COPY (
+                SELECT * FROM read_json_auto('{tmp_json_path}')
+            ) TO '{PARQUET_FILE}' (FORMAT PARQUET)
+        """)
+        
+        # Clean up temporary files
+        os.remove(tmp_json_path)
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        
+        print("Successfully converted JSON.GZ to Parquet using streaming")
+        return True
+        
     except Exception as e:
         print(f"Error converting JSON.GZ to Parquet: {e}")
         return False
