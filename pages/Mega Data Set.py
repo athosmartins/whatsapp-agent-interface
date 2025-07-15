@@ -708,7 +708,6 @@ def render_dynamic_filters(df):
 mega_df = None
 
 # Step 1: Load available bairros first (lightweight operation)
-st.info("🎯 **Selecione os bairros primeiro** para carregar apenas 3-5% dos dados!")
 
 try:
     monitor_memory_usage("before_bairros_loading")
@@ -735,6 +734,9 @@ try:
         
         with col2:
             if selected_bairros:
+                # Store selected bairros in session state
+                st.session_state.mega_data_filter_state["bairro_filter"] = selected_bairros
+                
                 estimated_reduction = (len(selected_bairros) / len(available_bairros)) * 100
                 st.metric(
                     "📊 Dados a carregar",
@@ -795,7 +797,6 @@ if load_data_btn and selected_bairros:
 
 # Only proceed if data is loaded
 if mega_df is None:
-    st.info("👆 Clique em 'Carregar Dados' acima para continuar")
     st.stop()
 
 # Show summary statistics for the loaded bairro data
@@ -806,53 +807,51 @@ if DEBUG:
     st.sidebar.write(f"**Bairros únicos**: {mega_df['BAIRRO'].nunique() if 'BAIRRO' in mega_df.columns else 'N/A'}")
     # Don't call get_summary_stats() as it loads the full dataset
 
-    # Get unique bairros for filter
-    bairro_col = None
-    for col in mega_df.columns:
-        if "BAIRRO" in col.upper():
-            bairro_col = col
-            break
+# Get unique bairros for filter (moved outside DEBUG block)
+bairro_col = None
+for col in mega_df.columns:
+    if "BAIRRO" in col.upper():
+        bairro_col = col
+        break
 
-    if bairro_col is None:
-        st.error("❌ Coluna 'BAIRRO' não encontrada no Mega Data Set.")
-        st.stop()
+if bairro_col is None:
+    st.error("❌ Coluna 'BAIRRO' não encontrada no Mega Data Set.")
+    st.stop()
 
-    # Get unique bairros, filtering out empty values
-    unique_bairros = mega_df[bairro_col].dropna().astype(str)
-    unique_bairros = unique_bairros[unique_bairros.str.strip() != ""]
-    unique_bairros = sorted(unique_bairros.unique())
+# Get unique bairros, filtering out empty values
+unique_bairros = mega_df[bairro_col].dropna().astype(str)
+unique_bairros = unique_bairros[unique_bairros.str.strip() != ""]
+unique_bairros = sorted(unique_bairros.unique())
 
-    if DEBUG:
-        st.sidebar.write(f"**Bairros únicos**: {len(unique_bairros)}")
-        st.sidebar.write(f"**Coluna bairro**: {bairro_col}")
+if DEBUG:
+    st.sidebar.write(f"**Bairros únicos**: {len(unique_bairros)}")
+    st.sidebar.write(f"**Coluna bairro**: {bairro_col}")
 
-    # Filter section
+# Filter section - moved outside DEBUG block
 
-    # Bairro filter with cascading (integrated into main filter area)
-    col1, col2 = st.columns([1, 2])
+# Bairro filter with cascading (integrated into main filter area)
+col1, col2 = st.columns([1, 2])
 
-    with col1:
-        # Get current selections first
-        current_bairros = st.session_state.mega_data_filter_state.get(
-            "bairro_filter", []
-        )
+with col1:
+    # Get current selections first
+    current_bairros = st.session_state.mega_data_filter_state.get(
+        "bairro_filter", []
+    )
 
-        # Get available bairros from full dataset (not cascaded) to preserve existing selections
-        available_bairros = mega_df[bairro_col].dropna().astype(str)
-        available_bairros = available_bairros[available_bairros.str.strip() != ""]
-        available_bairros = sorted(available_bairros.unique())
-
-        # All current selections are valid since we're using the full dataset
-        valid_bairros = [b for b in current_bairros if b in available_bairros]
-
-        selected_bairros = st.multiselect(
-            "🗺️ Selecione os Bairros:",
-            options=available_bairros,
-            default=valid_bairros,
-            help="Selecione um ou mais bairros para filtrar as propriedades",
-        )
-        # Update session state
-        st.session_state.mega_data_filter_state["bairro_filter"] = selected_bairros
+    # Use selected bairros from earlier step (no duplicate selector)
+    selected_bairros = st.session_state.mega_data_filter_state.get("bairro_filter", [])
+    
+    # Ensure default "Nome Logradouro" filter is added automatically
+    if selected_bairros and len(st.session_state.mega_data_filter_state.get("dynamic_filters", [])) == 0:
+        # Add default Nome Logradouro filter
+        nome_logradouro_filter = {
+            "column": "NOME LOGRADOURO",
+            "operator": "is_one_of",
+            "value": [],
+            "enabled": True
+        }
+        st.session_state.mega_data_filter_state["dynamic_filters"] = [nome_logradouro_filter]
+        st.rerun()
 
     # Dynamic filters with reorganized buttons
     dynamic_filters = render_dynamic_filters(mega_df)
@@ -932,21 +931,23 @@ if DEBUG:
         active_dynamic_filters
     )
 
-    # Show real-time property count for current filter state (without triggering map reload)
+    # Show real-time property count for current filter state (live updates)
     current_count = len(current_filtered_df)
-    if current_count != len(filtered_df):
-        if current_total_filters > 0:
-            current_filter_info = []
-            if selected_bairros:
-                current_filter_info.append(f"{len(selected_bairros)} bairro(s)")
-            if active_dynamic_filters:
-                current_filter_info.append(
-                    f"{len(active_dynamic_filters)} filtro(s) dinâmico(s)"
-                )
-
-            st.write(f"🔍 Filtros atuais mostrarão {current_count:,} imóveis")
-        else:
-            st.write(f"🔍 Filtros atuais mostrarão {current_count:,} imóveis")
+    
+    # Always show the live count prominently
+    if current_total_filters > 0:
+        current_filter_info = []
+        if selected_bairros:
+            current_filter_info.append(f"{len(selected_bairros)} bairro(s)")
+        if active_dynamic_filters:
+            current_filter_info.append(
+                f"{len(active_dynamic_filters)} filtro(s) dinâmico(s)"
+            )
+        
+        # Show live count in a prominent way
+        st.success(f"🏠 **{current_count:,} propriedades filtradas**")
+    else:
+        st.info(f"🏠 **{current_count:,} propriedades disponíveis**")
 
     # Show update status if there are pending changes
     if (
@@ -961,10 +962,8 @@ if DEBUG:
     # Hex API Integration Section
     if total_applied_filters > 0 and len(filtered_df) > 0:
 
-        # Description row
-        st.write(
-            f"{len(filtered_df):,} propriedades filtradas"
-        )
+        # Description row - prominently display final filter count
+        st.success(f"🎯 **{len(filtered_df):,} propriedades selecionadas para o mapa**")
 
         # Dropdown interface
         render_hex_dropdown_interface(filtered_df, funnel="mega_data_set")

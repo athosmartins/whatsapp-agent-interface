@@ -1036,6 +1036,7 @@ def render_property_map_streamlit(
                         "TIPO CONSTRUTIVO",
                         "AREA CONSTRUCAO",
                         "FRACAO IDEAL",
+                        'STATUS CONTATO',
                     ]
                     st.multiselect(
                         "🏷️ Campos no Tooltip:",

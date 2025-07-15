@@ -123,7 +123,8 @@ The system includes comprehensive property data integration via the mega_data_se
 - **User Feedback**: Ensure users get clear feedback on all actions, especially errors
 
 ### Code Quality
-- **Testing**: Always test solutions before marking them as complete. You never need to run a command to test locally, the application will always be up and running on http://localhost:8501/
+- **Testing in dev**: Always test solutions before marking them as complete. You never need to run a command to test locally, the application will always be up and running on http://localhost:8501/f
+- **Testing in prod**: After you push a code to the remote branch, always test all pages on the production url https://urblink-chat.streamlit.app/ - if you find errors, automatically fix, push them, and test agán
 - **Documentation**: Update documentation when adding new features or changing architecture
 - **Error Recovery**: Implement graceful error handling and recovery mechanisms
 
