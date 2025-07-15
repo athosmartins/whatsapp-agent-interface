@@ -6,7 +6,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 
-from auth.login_manager import simple_auth
+# Conditional import to prevent crashes when auth not needed
 from config import (
     ACOES_OPTS,
     CLASSIFICACAO_OPTS,
@@ -256,8 +256,14 @@ elif DEV:
 # ─── AUTHENTICATION ─────────────────────────────────────────────────────
 # Check authentication only if LOGIN_ENABLED is True
 if LOGIN_ENABLED:
-    if not simple_auth():
-        st.stop()
+    try:
+        from auth.login_manager import simple_auth
+        if not simple_auth():
+            st.stop()
+    except Exception as auth_error:
+        st.error(f"❌ Authentication error: {auth_error}")
+        st.info("Login disabled due to configuration error")
+        LOGIN_ENABLED = False
 else:
     # When login is disabled, show a warning in DEV mode
     if DEV:

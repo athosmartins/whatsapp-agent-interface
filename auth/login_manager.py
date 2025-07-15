@@ -14,8 +14,14 @@ def simple_auth() -> bool:
     # Initialize cookie manager
     cookie_manager = stx.CookieManager(key="cm_auth")
 
-    # Pull the dict of allowed users out of secrets.toml
-    USERS = st.secrets["auth_users"]
+    # Pull the dict of allowed users out of secrets.toml with fallback
+    try:
+        USERS = st.secrets["auth_users"]
+    except KeyError:
+        # Fallback if auth_users not configured in production
+        USERS = {}
+        st.error("❌ auth_users not configured in secrets")
+        return False
 
     # Initialize session state
     if "authenticated" not in st.session_state:
@@ -30,7 +36,7 @@ def simple_auth() -> bool:
         cookie_manager.get("urb_link_authenticated")
         cookie_manager.get("urb_link_username")
         # now rerun so those values show up below
-        st.experimental_rerun()
+        st.rerun()
 
     # Check cookie authentication FIRST (before session state)
     auth_cookie = cookie_manager.get("urb_link_authenticated")

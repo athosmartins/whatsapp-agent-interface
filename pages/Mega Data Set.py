@@ -784,9 +784,20 @@ try:
 
         # Convert DataFrame to list of dictionaries for map
         properties_for_map = []
+        
+        # Limit the number of properties to prevent memory issues
+        MAX_PROPERTIES = 50000  # Limit to prevent crashes
+        if len(display_df) > MAX_PROPERTIES:
+            st.warning(f"⚠️ Limitando a {MAX_PROPERTIES:,} propriedades no mapa para evitar problemas de memória")
+            display_df = display_df.head(MAX_PROPERTIES)
 
         for _, row in display_df.iterrows():
-            property_dict = row.to_dict()
+            try:
+                property_dict = row.to_dict()
+            except Exception as e:
+                if DEBUG:
+                    st.error(f"Error converting row to dict: {e}")
+                continue
 
             # Ensure GEOMETRY column exists
             if "GEOMETRY" not in property_dict:
@@ -851,12 +862,20 @@ try:
                 time_text.text(f"⏱️ Tempo decorrido: {elapsed_time:.1f}s")
 
                 # Render the map (this is where the actual time is spent)
-                render_property_map_streamlit(
-                    valid_properties,
-                    map_style="Light",
-                    enable_extra_options=True,
-                    enable_style_selector=False,
-                )
+                try:
+                    render_property_map_streamlit(
+                        valid_properties,
+                        map_style="Light",
+                        enable_extra_options=True,
+                        enable_style_selector=False,
+                    )
+                except Exception as map_error:
+                    progress_bar.progress(1.0)
+                    progress_text.text("❌ Erro ao renderizar mapa")
+                    st.error(f"Erro ao renderizar mapa: {str(map_error)}")
+                    if DEBUG:
+                        st.exception(map_error)
+                    return
 
                 # Complete progress after map is rendered
                 progress_bar.progress(1.0)
@@ -898,26 +917,31 @@ try:
         if display_columns:
             display_df = filtered_df[display_columns].copy()
 
-            # Format specific numeric columns
-            for col in display_df.columns:
-                if "VALOR" in col.upper():
-                    display_df[col] = display_df[col].apply(
-                        lambda x: (
-                            f"R$ {x:,.2f}".replace(",", "X")
-                            .replace(".", ",")
-                            .replace("X", ".")
-                            if isinstance(x, (int, float)) and pd.notna(x)
-                            else "N/A"
+            # Format specific numeric columns with error handling
+            try:
+                for col in display_df.columns:
+                    if "VALOR" in col.upper():
+                        display_df[col] = display_df[col].apply(
+                            lambda x: (
+                                f"R$ {x:,.2f}".replace(",", "X")
+                                .replace(".", ",")
+                                .replace("X", ".")
+                                if isinstance(x, (int, float)) and pd.notna(x)
+                                else "N/A"
+                            )
                         )
-                    )
-                elif "AREA" in col.upper():
-                    display_df[col] = display_df[col].apply(
-                        lambda x: (
-                            f"{x} m²"
-                            if isinstance(x, (int, float)) and pd.notna(x)
-                            else "N/A"
+                    elif "AREA" in col.upper():
+                        display_df[col] = display_df[col].apply(
+                            lambda x: (
+                                f"{x} m²"
+                                if isinstance(x, (int, float)) and pd.notna(x)
+                                else "N/A"
+                            )
                         )
-                    )
+            except Exception as format_error:
+                if DEBUG:
+                    st.error(f"Error formatting columns: {format_error}")
+                # Continue without formatting
 
             # Show table with pagination
             st.dataframe(
@@ -941,3 +965,5 @@ except Exception as e:
     if DEBUG:
         st.exception(e)
     st.info("Verifique se o Mega Data Set está configurado corretamente.")
+    # Stop execution to prevent further crashes
+    st.stop()

@@ -138,6 +138,15 @@ def _ensure_db() -> str:
     # On Streamlit Cloud write to /tmp; locally write beside the script
     path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREAMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
     
+    # PRODUCTION FIX: Bail out early in production to prevent timeout/OOM
+    if os.getenv("STREAMLIT_SERVER_HEADLESS") == "true":
+        # In production, use a fallback approach to prevent crashes
+        if not os.path.isfile(path):
+            # Create a minimal fallback to prevent crashes
+            print("Production mode: Using fallback to prevent Drive download timeout")
+            _download_from_drive_fallback(path)
+        return path
+    
     # Check if file exists and its age
     if os.path.isfile(path):
         # Check if file is older than 1 hour (3600 seconds) - much more aggressive
