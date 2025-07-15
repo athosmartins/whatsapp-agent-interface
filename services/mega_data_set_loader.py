@@ -8,6 +8,8 @@ import pandas as pd
 from typing import List, Dict, Optional
 import time
 import streamlit as st
+import gzip
+import json
 
 # Google Drive folder ID for mega_data_set files
 MEGA_DATA_SET_FOLDER_ID = "1yFhxSOAf9UdarCekCKCg1UqKl3MArZAp"
@@ -20,6 +22,69 @@ MANUAL_MEGA_DATA_SET_PATH = None  # e.g., "/path/to/your/real_mega_data_set.csv"
 # Global variable to store cached data
 _cached_mega_data = None
 _cache_timestamp = 0
+
+def load_compressed_json(file_path):
+    """
+    Load a compressed JSON file created by our custom converter.
+    
+    Args:
+        file_path: Path to the .json.gz file
+    
+    Returns:
+        pandas.DataFrame: Loaded data
+    """
+    print(f"Loading compressed JSON from {file_path}")
+    
+    try:
+        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+            # Read until we find the data section
+            line = f.readline()
+            while line and not line.startswith('### DATA ###'):
+                if line.startswith('### METADATA ###'):
+                    # Read metadata
+                    metadata_line = f.readline()
+                    try:
+                        metadata = json.loads(metadata_line)
+                        print(f"File format: {metadata.get('format', 'unknown')}")
+                        print(f"Columns: {len(metadata.get('columns', []))}")
+                        print(f"Chunks: {metadata.get('chunks', 'unknown')}")
+                    except:
+                        pass
+                line = f.readline()
+            
+            # Now read the data rows
+            rows = []
+            row_count = 0
+            
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        row = json.loads(line)
+                        rows.append(row)
+                        row_count += 1
+                        
+                        # Progress feedback for large files
+                        if row_count % 50000 == 0:
+                            print(f"  Loaded {row_count:,} rows...")
+                            
+                    except json.JSONDecodeError:
+                        continue  # Skip invalid lines
+            
+            print(f"Loaded {len(rows):,} rows from compressed file")
+            
+            # Convert to DataFrame
+            if rows:
+                df = pd.DataFrame(rows)
+                print(f"Created DataFrame: {len(df)} rows × {len(df.columns)} columns")
+                return df
+            else:
+                print("No valid data found in compressed file")
+                return pd.DataFrame()
+                
+    except Exception as e:
+        print(f"Error loading compressed JSON: {e}")
+        return pd.DataFrame()
 
 def download_latest_mega_data_set() -> Optional[str]:
     """
@@ -105,11 +170,16 @@ def download_latest_mega_data_set() -> Optional[str]:
             print("No files found in mega_data_set folder")
             return None
         
-        # Prioritize Parquet files over CSV for better performance
+        # Prioritize compressed JSON, then Parquet, then CSV for performance
+        compressed_files = [f for f in files if f['name'].lower().endswith('.json.gz')]
         parquet_files = [f for f in files if f['name'].lower().endswith('.parquet')]
         csv_files = [f for f in files if f['name'].lower().endswith('.csv')]
         
-        if parquet_files:
+        if compressed_files:
+            newest_file = compressed_files[0]  # Already sorted by creation time
+            file_extension = '.json.gz'
+            print(f"Using compressed JSON file for optimal performance: {newest_file['name']}")
+        elif parquet_files:
             newest_file = parquet_files[0]  # Already sorted by creation time
             file_extension = '.parquet'
             print(f"Using Parquet file for optimal performance: {newest_file['name']}")
@@ -118,7 +188,7 @@ def download_latest_mega_data_set() -> Optional[str]:
             file_extension = '.csv'
             print(f"Using CSV file: {newest_file['name']}")
         else:
-            print("No supported file formats found (looking for .parquet or .csv)")
+            print("No supported file formats found (looking for .json.gz, .parquet or .csv)")
             return None
         
         file_id = newest_file['id']
@@ -227,7 +297,11 @@ def load_mega_data_set() -> pd.DataFrame:
     
     try:
         # Load based on file extension
-        if file_path.lower().endswith('.parquet'):
+        if file_path.lower().endswith('.json.gz'):
+            print("Loading compressed JSON file...")
+            df = load_compressed_json(file_path)
+            print(f"Successfully loaded mega_data_set from compressed JSON file")
+        elif file_path.lower().endswith('.parquet'):
             print("Loading Parquet file...")
             df = pd.read_parquet(file_path)
             print(f"Successfully loaded mega_data_set from Parquet file")
