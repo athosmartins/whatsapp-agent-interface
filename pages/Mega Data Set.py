@@ -694,13 +694,21 @@ def render_dynamic_filters(df):
     return st.session_state.mega_data_filter_state["dynamic_filters"]
 
 
-@st.cache_data(ttl=3600, max_entries=1)  # Cache for 1 hour, only 1 entry for memory
+@st.cache_data(ttl=3600, max_entries=2)  # Cache for 1 hour, max 2 entries
 def load_mega_data():
-    """Load mega data set with caching."""
-    return load_mega_data_set()
+    """Load mega data set with optimized caching and categorization."""
+    df = load_mega_data_set()
+    
+    # Categorize string columns once for memory efficiency
+    for col in df.select_dtypes("object"):
+        if df[col].nunique() < len(df) * 0.5:  # Less than 50% unique values
+            df[col] = df[col].astype("category")
+            print(f"Categorized column {col} for memory efficiency")
+    
+    return df
 
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, max_entries=2)
 def get_summary_stats():
     """Get summary statistics with caching."""
     return get_property_summary_stats()
@@ -716,7 +724,7 @@ col1, col2 = st.columns([1, 3])
 with col1:
     load_data_btn = st.button("📊 Carregar Dados", type="primary")
 
-if load_data_btn or not IS_PRODUCTION:
+if load_data_btn:
     # Load data with production protection and enhanced debugging
     try:
         monitor_memory_usage("before_data_loading")
@@ -1138,13 +1146,4 @@ if DEBUG:
             st.info(f"📋 Total de {len(display_columns)} colunas disponíveis")
         else:
             st.warning("⚠️ Nenhuma coluna encontrada para exibição")
-
-except Exception as e:
-    monitor_memory_usage("during_critical_error")
-    log_error_with_context(e, "Critical error in Mega Data Set page", show_user=False)
-    st.error(f"❌ Erro ao carregar dados: {str(e)}")
-    if DEBUG:
-        st.exception(e)
-    st.info("Verifique se o Mega Data Set está configurado corretamente.")
-    # Stop execution to prevent further crashes
     st.stop()

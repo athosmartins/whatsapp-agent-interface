@@ -10,6 +10,7 @@ import time
 import streamlit as st
 import gzip
 import json
+import duckdb
 
 # Google Drive folder ID for mega_data_set files
 MEGA_DATA_SET_FOLDER_ID = "1yFhxSOAf9UdarCekCKCg1UqKl3MArZAp"
@@ -238,7 +239,7 @@ def download_latest_mega_data_set() -> Optional[str]:
         print(f"Traceback: {traceback.format_exc()}")
         return None
 
-@st.cache_data(ttl=CACHE_DURATION)
+@st.cache_data(ttl=CACHE_DURATION, max_entries=1)
 def load_mega_data_set() -> pd.DataFrame:
     """
     Load the mega_data_set file into a pandas DataFrame.
@@ -383,7 +384,7 @@ def get_mega_data_set_schema() -> Dict[str, str]:
     
     return schema
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+@st.cache_data(ttl=3600, max_entries=10)  # Cache for 1 hour
 def find_properties_by_documento(documento_proprietario: str) -> List[Dict]:
     """
     Find all properties that belong to a specific document holder (CPF).
@@ -442,7 +443,7 @@ def clean_document_number(documento: str) -> str:
     
     return clean
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+@st.cache_data(ttl=3600, max_entries=20)  # Cache for 1 hour
 def get_properties_for_phone(phone_number: str) -> List[Dict]:
     """
     Get all properties for a given phone number.
@@ -653,3 +654,62 @@ def clear_cache():
     # Also clear Streamlit cache
     if hasattr(st, 'cache_data'):
         st.cache_data.clear()
+
+def get_slice(offset=0, limit=20000):
+    """
+    Get a slice of the mega_data_set using DuckDB for memory-efficient paging.
+    
+    Args:
+        offset: Starting row (0-indexed)
+        limit: Maximum number of rows to return
+        
+    Returns:
+        DataFrame with the requested slice
+    """
+    try:
+        # First, try to find a parquet file for optimal performance
+        from services.google_drive_loader import GoogleDriveLoader
+        
+        loader = GoogleDriveLoader()
+        files = loader.list_files(MEGA_DATA_SET_FOLDER_ID)
+        
+        # Find the newest parquet file
+        parquet_files = [f for f in files if f['name'].lower().endswith('.parquet')]
+        
+        if parquet_files:
+            # Sort by creation time and get the newest
+            parquet_files.sort(key=lambda x: x['createdTime'], reverse=True)
+            newest_file = parquet_files[0]
+            
+            # Download the parquet file
+            temp_path = f"/tmp/mega_data_set_{newest_file['id']}.parquet"
+            success = loader.download_file(newest_file['id'], temp_path)
+            
+            if success:
+                # Use DuckDB to efficiently query the parquet file
+                query = f"""
+                    SELECT * FROM '{temp_path}' 
+                    LIMIT {limit} OFFSET {offset}
+                """
+                df = duckdb.query(query).df()
+                
+                # Clean up temp file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                
+                return df
+        
+        # Fallback: use regular loading with manual slicing
+        full_df = load_mega_data_set()
+        if full_df.empty:
+            return pd.DataFrame()
+        
+        # Manual slicing
+        end_idx = offset + limit
+        sliced_df = full_df.iloc[offset:end_idx].copy()
+        
+        return sliced_df
+        
+    except Exception as e:
+        print(f"Error getting slice: {e}")
+        return pd.DataFrame()
