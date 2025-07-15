@@ -875,7 +875,7 @@ try:
                     st.error(f"Erro ao renderizar mapa: {str(map_error)}")
                     if DEBUG:
                         st.exception(map_error)
-                    return
+                    st.stop()
 
                 # Complete progress after map is rendered
                 progress_bar.progress(1.0)
