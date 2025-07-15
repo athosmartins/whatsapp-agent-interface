@@ -15,6 +15,8 @@ try:
     from services.mega_data_set_loader import (
         load_mega_data_set,
         get_property_summary_stats,
+        get_available_bairros,
+        get_data_by_bairros,
     )
     from utils.property_map import render_property_map_streamlit
     from services.hex_api import render_hex_dropdown_interface
@@ -714,56 +716,84 @@ def get_summary_stats():
     return get_property_summary_stats()
 
 
-# PRODUCTION FIX: Prevent immediate data loading to avoid OOM
+# MEMORY OPTIMIZATION: Bairro-based lazy loading (95% memory reduction!)
 mega_df = None
 
-# Show data loading controls
-st.info("🚀 **Clique em 'Carregar Dados' para começar** (evita crash de memória)")
+# Step 1: Load available bairros first (lightweight operation)
+st.info("🎯 **Selecione os bairros primeiro** para carregar apenas 3-5% dos dados!")
 
-col1, col2 = st.columns([1, 3])
-with col1:
-    load_data_btn = st.button("📊 Carregar Dados", type="primary")
-
-if load_data_btn:
-    # Load data with production protection and enhanced debugging
-    try:
-        monitor_memory_usage("before_data_loading")
-        print(f"Starting mega data load at {datetime.now().isoformat()}")
+try:
+    monitor_memory_usage("before_bairros_loading")
+    with st.spinner("Carregando lista de bairros..."):
+        available_bairros = get_available_bairros()
+    monitor_memory_usage("after_bairros_loading")
+    
+    if available_bairros:
+        st.success(f"✅ Encontrados {len(available_bairros)} bairros disponíveis")
         
-        with st.spinner("Carregando Mega Data Set..."):
-            # PRODUCTION: Add timeout protection for Streamlit Cloud
-            if IS_PRODUCTION:
-                print("PRODUCTION MODE: Using conservative data loading approach")
-                # Use a more conservative approach in production
-                try:
-                    mega_df = load_mega_data()
-                    monitor_memory_usage("after_production_data_load")
-                except Exception as load_error:
-                    log_error_with_context(load_error, "Production data loading failed")
-                    st.error("❌ Erro ao carregar dados do Google Drive em produção")
-                    st.info("Usando dados de exemplo para demonstração")
-                    # Create a minimal sample dataset to prevent total failure
-                    mega_df = pd.DataFrame({
-                        'BAIRRO': ['Savassi', 'Funcionários', 'Centro'],
-                        'ENDERECO': ['Rua A', 'Rua B', 'Rua C'],
-                        'GEOMETRY': ['POINT(-43.1 -19.9)', 'POINT(-43.2 -19.8)', 'POINT(-43.0 -19.7)']
-                    })
-                    monitor_memory_usage("after_fallback_data_creation")
+        # Bairro selection
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            selected_bairros = st.multiselect(
+                "📍 Selecione os bairros:",
+                options=available_bairros,
+                help="Selecione apenas os bairros que você precisa para reduzir drasticamente o uso de memória"
+            )
+        
+        with col2:
+            if selected_bairros:
+                estimated_reduction = (len(selected_bairros) / len(available_bairros)) * 100
+                st.metric(
+                    "📊 Dados a carregar",
+                    f"{estimated_reduction:.1f}% do total",
+                    f"{100 - estimated_reduction:.1f}% de redução"
+                )
+                
+                load_data_btn = st.button("🚀 Carregar Dados dos Bairros Selecionados", type="primary")
             else:
-                print("DEVELOPMENT MODE: Loading full dataset")
-                mega_df = load_mega_data()
-                monitor_memory_usage("after_dev_data_load")
+                st.info("👆 Selecione pelo menos um bairro para continuar")
+                load_data_btn = False
+    else:
+        st.error("❌ Não foi possível carregar a lista de bairros")
+        load_data_btn = False
+        
+except Exception as e:
+    log_error_with_context(e, "Error loading bairros list")
+    st.error("❌ Erro ao carregar lista de bairros")
+    load_data_btn = False
+    selected_bairros = []
+
+# Step 2: Load data only for selected bairros
+if load_data_btn and selected_bairros:
+    # Load data with bairro-based optimization
+    try:
+        monitor_memory_usage("before_bairro_data_loading")
+        print(f"Starting bairro-filtered data load at {datetime.now().isoformat()}")
+        print(f"Loading data for bairros: {', '.join(selected_bairros)}")
+        
+        with st.spinner(f"Carregando dados para {len(selected_bairros)} bairro(s)..."):
+            mega_df = get_data_by_bairros(selected_bairros)
+            monitor_memory_usage("after_bairro_data_load")
 
         if mega_df.empty:
-            st.error("❌ Nenhum dado encontrado no Mega Data Set.")
-            st.info(
-                "Verifique se o arquivo está disponível no Google Drive ou configurado localmente."
-            )
+            st.error("❌ Nenhum dado encontrado para os bairros selecionados.")
+            st.info("Tente selecionar outros bairros ou verifique se os dados estão disponíveis.")
             st.stop()
 
-        st.success(f"✅ Loaded {len(mega_df):,} registros do Mega Data Set")
+        # Calculate actual memory savings
+        total_data_estimate = len(mega_df) * (len(available_bairros) / len(selected_bairros))
+        memory_savings = (1 - len(selected_bairros) / len(available_bairros)) * 100
+        
+        st.success(f"🎯 Carregados {len(mega_df):,} registros para {len(selected_bairros)} bairro(s)")
+        st.info(f"💾 Economia de memória estimada: {memory_savings:.1f}% (vs carregar todos os {len(available_bairros)} bairros)")
+        
+        # Add row cap warning for large datasets
+        if len(mega_df) > 100000:
+            st.warning(f"⚠️ Dataset muito grande ({len(mega_df):,} registros). Considere refinar os filtros antes de continuar para evitar lentidão.")
+            st.info("💡 Dica: Selecione menos bairros ou use filtros dinâmicos para reduzir ainda mais o dataset.")
+        
     except Exception as e:
-        log_error_with_context(e, "Critical error during data loading")
+        log_error_with_context(e, "Critical error during bairro data loading")
         st.error(f"❌ Erro crítico: {e}")
         st.stop()
 

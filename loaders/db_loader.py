@@ -3,6 +3,8 @@ import os
 import sqlite3
 import pandas as pd
 import time
+import streamlit as st
+import duckdb
 
 GDRIVE_FILE_ID   = "1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw"   # snapshot folder/file ID
 LOCAL_DB_PATH    = "whatsapp_conversations.db"           # always the same name
@@ -160,21 +162,16 @@ def _ensure_db() -> str:
     
     return path
 
+@st.cache_data(ttl=3600, max_entries=2, show_spinner="📥 Carregando banco...")
 def get_dataframe() -> pd.DataFrame:
-    """Load <TABLE> into a DataFrame (guarantees column names untouched)."""
+    """Return the master table – cached for 1 h and max 2 versions."""
     db_path = _ensure_db()
     
-    # Get the file modification time to use as cache key
-    file_mtime = os.path.getmtime(db_path)
+    # Use DuckDB for efficient querying
+    con = duckdb.connect(db_path, read_only=True)
+    df = con.execute(f"SELECT * FROM {TABLE}").df()
+    con.close()
     
-    # Use the file modification time as part of the cache key
-    return _load_dataframe_with_cache(db_path, file_mtime)
-
-def _load_dataframe_with_cache(db_path: str, file_mtime: float) -> pd.DataFrame:
-    """Load dataframe with cache that's aware of file changes."""
-    with sqlite3.connect(db_path) as conn:
-        df = pd.read_sql_query(f"SELECT * FROM {TABLE}", conn)
-
     # Normalise that one rogue column
     if "OBITO PROVAVEL" in df.columns and "OBITO_PROVAVEL" not in df.columns:
         df = df.rename(columns={"OBITO PROVAVEL": "OBITO_PROVAVEL"})

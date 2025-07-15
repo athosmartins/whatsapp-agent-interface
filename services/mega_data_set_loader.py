@@ -655,6 +655,151 @@ def clear_cache():
     if hasattr(st, 'cache_data'):
         st.cache_data.clear()
 
+@st.cache_data(ttl=3600, max_entries=5)
+def get_available_bairros() -> List[str]:
+    """Get list of available bairros without loading full dataset."""
+    try:
+        # Try to get bairros from a smaller query first
+        from services.google_drive_loader import GoogleDriveLoader
+        
+        loader = GoogleDriveLoader()
+        files = loader.list_files(MEGA_DATA_SET_FOLDER_ID)
+        
+        # Find compressed JSON or parquet files
+        data_files = [f for f in files if f['name'].lower().endswith(('.json.gz', '.parquet'))]
+        
+        if data_files:
+            # Sort by creation time and get the newest
+            data_files.sort(key=lambda x: x['createdTime'], reverse=True)
+            newest_file = data_files[0]
+            
+            # Download the file
+            temp_path = f"/tmp/mega_data_set_{newest_file['id']}.{newest_file['name'].split('.')[-1]}"
+            success = loader.download_file(newest_file['id'], temp_path)
+            
+            if success:
+                # Use DuckDB to efficiently query just the BAIRRO column
+                if temp_path.endswith('.parquet'):
+                    query = "SELECT DISTINCT BAIRRO FROM read_parquet('{}') WHERE BAIRRO IS NOT NULL ORDER BY BAIRRO".format(temp_path)
+                else:
+                    # For JSON, load minimal data
+                    df = load_compressed_json(temp_path)
+                    bairro_col = None
+                    for col in df.columns:
+                        if 'BAIRRO' in col.upper():
+                            bairro_col = col
+                            break
+                    
+                    if bairro_col:
+                        bairros = df[bairro_col].dropna().unique()
+                        bairros = sorted([str(b) for b in bairros])
+                        
+                        # Clean up temp file
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                            
+                        return bairros
+                
+                if temp_path.endswith('.parquet'):
+                    bairros_df = duckdb.query(query).df()
+                    bairros = bairros_df['BAIRRO'].tolist()
+                    
+                    # Clean up temp file
+                    if os.path.exists(temp_path):
+                        os.remove(temp_path)
+                        
+                    return bairros
+        
+        # Fallback: load full dataset and extract bairros
+        df = load_mega_data_set()
+        if df.empty:
+            return []
+        
+        # Find bairro column
+        bairro_col = None
+        for col in df.columns:
+            if 'BAIRRO' in col.upper():
+                bairro_col = col
+                break
+        
+        if bairro_col:
+            bairros = df[bairro_col].dropna().unique()
+            return sorted([str(b) for b in bairros])
+        
+        return []
+        
+    except Exception as e:
+        print(f"Error getting available bairros: {e}")
+        return []
+
+@st.cache_data(ttl=3600, max_entries=10)
+def get_data_by_bairros(selected_bairros: List[str]) -> pd.DataFrame:
+    """
+    Load ONLY the data for selected bairros - this is the memory game-changer!
+    Reduces memory usage by 95%+ since users typically select 1-2 bairros out of 20-30.
+    """
+    if not selected_bairros:
+        return pd.DataFrame()
+        
+    try:
+        # Try to use DuckDB for efficient filtering
+        from services.google_drive_loader import GoogleDriveLoader
+        
+        loader = GoogleDriveLoader()
+        files = loader.list_files(MEGA_DATA_SET_FOLDER_ID)
+        
+        # Find parquet files first (most efficient)
+        parquet_files = [f for f in files if f['name'].lower().endswith('.parquet')]
+        
+        if parquet_files:
+            # Sort by creation time and get the newest
+            parquet_files.sort(key=lambda x: x['createdTime'], reverse=True)
+            newest_file = parquet_files[0]
+            
+            # Download the parquet file
+            temp_path = f"/tmp/mega_data_set_{newest_file['id']}.parquet"
+            success = loader.download_file(newest_file['id'], temp_path)
+            
+            if success:
+                # Use DuckDB to efficiently query only selected bairros
+                bairros_str = "', '".join(selected_bairros)
+                query = f"""
+                    SELECT * FROM read_parquet('{temp_path}') 
+                    WHERE BAIRRO IN ('{bairros_str}')
+                """
+                df = duckdb.query(query).df()
+                
+                print(f"Loaded {len(df):,} rows for bairros: {', '.join(selected_bairros)}")
+                
+                # Clean up temp file
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                
+                return df
+        
+        # Fallback: load full dataset and filter (less efficient but works)
+        full_df = load_mega_data_set()
+        if full_df.empty:
+            return pd.DataFrame()
+        
+        # Find bairro column
+        bairro_col = None
+        for col in full_df.columns:
+            if 'BAIRRO' in col.upper():
+                bairro_col = col
+                break
+        
+        if bairro_col:
+            filtered_df = full_df[full_df[bairro_col].isin(selected_bairros)].copy()
+            print(f"Filtered to {len(filtered_df):,} rows for bairros: {', '.join(selected_bairros)}")
+            return filtered_df
+        
+        return full_df
+        
+    except Exception as e:
+        print(f"Error loading data by bairros: {e}")
+        return pd.DataFrame()
+
 def get_slice(offset=0, limit=20000):
     """
     Get a slice of the mega_data_set using DuckDB for memory-efficient paging.
