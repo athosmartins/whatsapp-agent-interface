@@ -859,101 +859,135 @@ if os.path.exists(PARQUET_FILE):
         pass
 
 def list_bairros_optimized():
-    """Get list of available bairros using DuckDB predicate push-down with fallbacks."""
+    """Get list of available bairros using streaming JSON reading (memory efficient)."""
     try:
-        # Try parquet file first
-        if _ensure_parquet_file():
-            # Use DuckDB to efficiently query just the BAIRRO column
-            result = duckdb.sql(f"""
-                SELECT DISTINCT BAIRRO
-                FROM read_parquet('{PARQUET_FILE}')
-                WHERE BAIRRO IS NOT NULL
-                ORDER BY BAIRRO
-            """).fetchall()
+        # Try streaming JSON approach first (no parquet needed)
+        print("Attempting to load bairros using streaming JSON...")
+        
+        # Download the JSON.GZ file
+        file_path = download_latest_mega_data_set()
+        if not file_path or not file_path.lower().endswith('.json.gz'):
+            print("No JSON.GZ file found, using fallback bairros")
+            return _get_fallback_bairros()
+        
+        # Stream through JSON.GZ file to extract just unique bairros
+        bairros_set = set()
+        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+            # Skip metadata lines
+            line = f.readline()
+            while line and not line.startswith('### DATA ###'):
+                line = f.readline()
             
-            bairros = [row[0] for row in result]
-            if bairros:
-                print(f"Loaded {len(bairros)} bairros from parquet file")
-                return bairros
+            # Process JSON lines to extract BAIRRO values
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        row = json.loads(line)
+                        bairro = row.get('BAIRRO')
+                        if bairro and bairro.strip():
+                            bairros_set.add(bairro.strip())
+                    except json.JSONDecodeError:
+                        continue  # Skip invalid lines
         
-        # Fallback 1: Skip the problematic cached function to avoid widget issues
-        print("Parquet failed, skipping cached function that causes widget issues...")
+        # Clean up downloaded file
+        if os.path.exists(file_path):
+            os.remove(file_path)
         
-        # Fallback 2: Use hardcoded common bairros for BH area
-        print("Using hardcoded bairros...")
-        fallback_bairros = [
-            "Centro", "Savassi", "Funcionários", "Lourdes", "Buritis",
-            "Cidade Nova", "Prado", "Serra", "Belvedere", "Mangabeiras",
-            "Coração Eucarístico", "Pampulha", "Cidade Jardim", "Anchieta",
-            "Floresta", "Sagrada Família", "Jardim América", "Liberdade",
-            "Ouro Preto", "Castelo", "Gutierrez", "Barro Preto", "Carmo",
-            "Grajaú", "Boa Vista", "Cruzeiro", "Luxemburgo", "Sion"
-        ]
-        return fallback_bairros
+        # Convert to sorted list
+        bairros = sorted(list(bairros_set))
+        print(f"Loaded {len(bairros)} bairros from streaming JSON")
+        return bairros
         
     except Exception as e:
-        print(f"Error getting bairros list: {e}")
-        # Return hardcoded fallback
-        return [
-            "Centro", "Savassi", "Funcionários", "Lourdes", "Buritis",
-            "Cidade Nova", "Prado", "Serra", "Belvedere", "Mangabeiras"
-        ]
+        print(f"Error in list_bairros_optimized: {e}")
+        print("Falling back to hardcoded bairros...")
+        return _get_fallback_bairros()
+
+def _get_fallback_bairros():
+    """Get fallback bairros for BH area."""
+    return [
+        "Centro", "Savassi", "Funcionários", "Lourdes", "Buritis",
+        "Cidade Nova", "Prado", "Serra", "Belvedere", "Mangabeiras",
+        "Coração Eucarístico", "Pampulha", "Cidade Jardim", "Anchieta",
+        "Floresta", "Sagrada Família", "Jardim América", "Liberdade",
+        "Ouro Preto", "Castelo", "Gutierrez", "Barro Preto", "Carmo",
+        "Grajaú", "Boa Vista", "Cruzeiro", "Luxemburgo", "Sion"
+    ]
 
 def load_bairros_optimized(bairros: list):
-    """Load data for selected bairros using DuckDB predicate push-down with fallbacks."""
+    """Load data for selected bairros using streaming JSON reading (memory efficient)."""
     if not bairros:
         return pd.DataFrame()
         
     try:
-        # Try parquet file first
-        if _ensure_parquet_file():
-            # Use DuckDB with parameterized query for efficiency
-            placeholders = ','.join(['?' for _ in bairros])
-            sql = f"""
-                SELECT *
-                FROM read_parquet('{PARQUET_FILE}')
-                WHERE BAIRRO IN ({placeholders})
-            """
-            df = duckdb.sql(sql, bairros).df()
+        # Try streaming JSON approach first (no parquet needed)
+        print(f"Loading data for {len(bairros)} bairros using streaming JSON...")
+        
+        # Download the JSON.GZ file
+        file_path = download_latest_mega_data_set()
+        if not file_path or not file_path.lower().endswith('.json.gz'):
+            print("No JSON.GZ file found, using sample data")
+            return _get_sample_data(bairros)
+        
+        # Stream through JSON.GZ file to extract rows for selected bairros
+        bairros_set = set(bairros)
+        matching_rows = []
+        
+        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+            # Skip metadata lines
+            line = f.readline()
+            while line and not line.startswith('### DATA ###'):
+                line = f.readline()
             
-            if not df.empty:
-                print(f"Loaded {len(df):,} rows for bairros from parquet: {', '.join(bairros)}")
-                return df
+            # Process JSON lines to extract rows for matching bairros
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        row = json.loads(line)
+                        bairro = row.get('BAIRRO')
+                        if bairro and bairro.strip() in bairros_set:
+                            matching_rows.append(row)
+                    except json.JSONDecodeError:
+                        continue  # Skip invalid lines
         
-        # Fallback 1: Skip the problematic cached function to avoid widget issues
-        print("Parquet failed, skipping cached function that causes widget issues...")
+        # Clean up downloaded file
+        if os.path.exists(file_path):
+            os.remove(file_path)
         
-        # Fallback 2: Create sample data
-        print("Creating sample data...")
-        sample_data = []
-        for i, bairro in enumerate(bairros):
-            for j in range(5):  # 5 sample properties per bairro
-                sample_data.append({
-                    'BAIRRO': bairro,
-                    'ENDERECO': f'Rua {bairro} {j+1}',
-                    'INDICE_CADASTRAL': f'{bairro[:3].upper()}{i:03d}{j:03d}',
-                    'GEOMETRY': f'POINT(-43.{950+i} -19.{900+j})',
-                    'AREA_CONSTRUCAO': 100 + (i * 10) + j,
-                    'AREA_TERRENO': 200 + (i * 20) + j,
-                    'TIPO_CONSTRUTIVO': 'Residencial'
-                })
-        
-        df = pd.DataFrame(sample_data)
-        print(f"Created sample data with {len(df):,} rows for bairros: {', '.join(bairros)}")
-        return df
+        # Convert to DataFrame
+        if matching_rows:
+            df = pd.DataFrame(matching_rows)
+            print(f"Loaded {len(df):,} rows for bairros from streaming JSON: {', '.join(bairros)}")
+            return df
+        else:
+            print("No matching rows found, using sample data")
+            return _get_sample_data(bairros)
         
     except Exception as e:
-        print(f"Error loading bairros data: {e}")
-        # Return minimal sample data
-        return pd.DataFrame([{
-            'BAIRRO': bairros[0] if bairros else 'Centro',
-            'ENDERECO': 'Rua Exemplo 1',
-            'INDICE_CADASTRAL': 'SAMPLE001',
-            'GEOMETRY': 'POINT(-43.950 -19.900)',
-            'AREA_CONSTRUCAO': 100,
-            'AREA_TERRENO': 200,
-            'TIPO_CONSTRUTIVO': 'Residencial'
-        }])
+        print(f"Error in load_bairros_optimized: {e}")
+        print("Falling back to sample data...")
+        return _get_sample_data(bairros)
+
+def _get_sample_data(bairros: list):
+    """Get sample data for selected bairros."""
+    sample_data = []
+    for i, bairro in enumerate(bairros):
+        for j in range(5):  # 5 sample properties per bairro
+            sample_data.append({
+                'BAIRRO': bairro,
+                'ENDERECO': f'Rua {bairro} {j+1}',
+                'INDICE_CADASTRAL': f'{bairro[:3].upper()}{i:03d}{j:03d}',
+                'GEOMETRY': f'POINT(-43.{950+i} -19.{900+j})',
+                'AREA_CONSTRUCAO': 100 + (i * 10) + j,
+                'AREA_TERRENO': 200 + (i * 20) + j,
+                'TIPO_CONSTRUTIVO': 'Residencial'
+            })
+    
+    df = pd.DataFrame(sample_data)
+    print(f"Created sample data with {len(df):,} rows for bairros: {', '.join(bairros)}")
+    return df
 
 def _ensure_parquet_file() -> bool:
     """Ensure parquet file exists, download if needed."""
@@ -961,9 +995,9 @@ def _ensure_parquet_file() -> bool:
         print("Parquet file already exists")
         return True
         
-    # Try to convert JSON.GZ to Parquet for DuckDB compatibility using streaming
+    # Try to convert JSON.GZ to Parquet for DuckDB compatibility using pandas chunking
     try:
-        print("Attempting to convert JSON.GZ to Parquet using streaming...")
+        print("Attempting to convert JSON.GZ to Parquet using pandas chunking...")
         
         # Download the JSON.GZ file first
         file_path = download_latest_mega_data_set()
@@ -971,38 +1005,75 @@ def _ensure_parquet_file() -> bool:
             print("No JSON.GZ file found for conversion")
             return False
         
-        # Use DuckDB to convert JSON.GZ directly to Parquet without loading into memory
-        print(f"Converting JSON.GZ to Parquet using DuckDB streaming...")
+        print(f"Converting JSON.GZ to Parquet using pandas chunking...")
         
-        # Create a temporary JSON file from the compressed one for DuckDB
+        # Use the same chunked approach as load_compressed_json but save to Parquet
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_json:
-            tmp_json_path = tmp_json.name
+        rows = []
+        row_count = 0
+        chunk_size = 10000  # Process in smaller chunks
         
-        # Decompress JSON.GZ to temporary JSON file
-        with gzip.open(file_path, 'rt', encoding='utf-8') as f_in:
-            with open(tmp_json_path, 'w', encoding='utf-8') as f_out:
-                # Skip metadata lines and write only JSON lines
-                for line in f_in:
-                    if line.startswith('###'):
-                        continue
-                    if line.strip() and not line.startswith('#'):
-                        f_out.write(line)
+        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+            # Read until we find the data section
+            line = f.readline()
+            while line and not line.startswith('### DATA ###'):
+                if line.startswith('### METADATA ###'):
+                    # Read metadata
+                    metadata_line = f.readline()
+                    try:
+                        metadata = json.loads(metadata_line)
+                        print(f"File format: {metadata.get('format', 'unknown')}")
+                        print(f"Columns: {len(metadata.get('columns', []))}")
+                        print(f"Chunks: {metadata.get('chunks', 'unknown')}")
+                    except:
+                        pass
+                line = f.readline()
+            
+            # Process data in chunks to avoid memory issues
+            is_first_chunk = True
+            for line in f:
+                line = line.strip()
+                if line:
+                    try:
+                        row = json.loads(line)
+                        rows.append(row)
+                        row_count += 1
+                        
+                        # Process in chunks
+                        if len(rows) >= chunk_size:
+                            chunk_df = pd.DataFrame(rows)
+                            
+                            # Write to parquet (append mode after first chunk)
+                            if is_first_chunk:
+                                chunk_df.to_parquet(PARQUET_FILE, index=False)
+                                is_first_chunk = False
+                            else:
+                                # Append to existing parquet file
+                                existing_df = pd.read_parquet(PARQUET_FILE)
+                                combined_df = pd.concat([existing_df, chunk_df], ignore_index=True)
+                                combined_df.to_parquet(PARQUET_FILE, index=False)
+                            
+                            rows = []  # Clear chunk
+                            print(f"  Processed {row_count:,} rows...")
+                            
+                    except json.JSONDecodeError:
+                        continue  # Skip invalid lines
+            
+            # Process remaining rows
+            if rows:
+                chunk_df = pd.DataFrame(rows)
+                if is_first_chunk:
+                    chunk_df.to_parquet(PARQUET_FILE, index=False)
+                else:
+                    existing_df = pd.read_parquet(PARQUET_FILE)
+                    combined_df = pd.concat([existing_df, chunk_df], ignore_index=True)
+                    combined_df.to_parquet(PARQUET_FILE, index=False)
         
-        # Use DuckDB to convert JSON to Parquet
-        print("Converting JSON to Parquet using DuckDB...")
-        duckdb.sql(f"""
-            COPY (
-                SELECT * FROM read_json_auto('{tmp_json_path}')
-            ) TO '{PARQUET_FILE}' (FORMAT PARQUET)
-        """)
-        
-        # Clean up temporary files
-        os.remove(tmp_json_path)
+        # Clean up downloaded file
         if os.path.exists(file_path):
             os.remove(file_path)
         
-        print("Successfully converted JSON.GZ to Parquet using streaming")
+        print(f"Successfully converted JSON.GZ to Parquet ({row_count:,} rows)")
         return True
         
     except Exception as e:
