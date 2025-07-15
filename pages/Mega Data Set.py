@@ -698,24 +698,10 @@ def render_dynamic_filters(df):
     return st.session_state.mega_data_filter_state["dynamic_filters"]
 
 
-@st.cache_data(ttl=3600, max_entries=2)  # Cache for 1 hour, max 2 entries
-def load_mega_data():
-    """Load mega data set with optimized caching and categorization."""
-    df = load_mega_data_set()
-    
-    # Categorize string columns once for memory efficiency
-    for col in df.select_dtypes("object"):
-        if df[col].nunique() < len(df) * 0.5:  # Less than 50% unique values
-            df[col] = df[col].astype("category")
-            print(f"Categorized column {col} for memory efficiency")
-    
-    return df
+# load_mega_data() function removed - now using optimized bairro-based loading
 
 
-@st.cache_data(ttl=3600, max_entries=2)
-def get_summary_stats():
-    """Get summary statistics with caching."""
-    return get_property_summary_stats()
+# get_summary_stats() function removed - now using direct stats from loaded bairro data to avoid full dataset loading
 
 
 # MEMORY OPTIMIZATION: Bairro-based lazy loading (95% memory reduction!)
@@ -756,7 +742,9 @@ try:
                     f"{100 - estimated_reduction:.1f}% de redução"
                 )
                 
-                load_data_btn = st.button("🚀 Carregar Dados dos Bairros Selecionados", type="primary")
+                # Auto-load data when bairros are selected (no manual button needed)
+                load_data_btn = True
+                st.info("🚀 Carregando dados automaticamente...")
             else:
                 st.info("👆 Selecione pelo menos um bairro para continuar")
                 load_data_btn = False
@@ -810,15 +798,13 @@ if mega_df is None:
     st.info("👆 Clique em 'Carregar Dados' acima para continuar")
     st.stop()
 
-# Show summary statistics
+# Show summary statistics for the loaded bairro data
 if DEBUG:
-    st.sidebar.write("**Estatísticas do Mega Data Set:**")
-    stats = get_summary_stats()
-    for key, value in stats.items():
-        if isinstance(value, dict):
-            st.sidebar.write(f"**{key}**: {len(value)} únicos")
-        else:
-            st.sidebar.write(f"**{key}**: {value:,}")
+    st.sidebar.write("**Estatísticas dos Bairros Carregados:**")
+    st.sidebar.write(f"**Total de registros**: {len(mega_df):,}")
+    st.sidebar.write(f"**Colunas**: {len(mega_df.columns)}")
+    st.sidebar.write(f"**Bairros únicos**: {mega_df['BAIRRO'].nunique() if 'BAIRRO' in mega_df.columns else 'N/A'}")
+    # Don't call get_summary_stats() as it loads the full dataset
 
     # Get unique bairros for filter
     bairro_col = None
