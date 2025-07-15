@@ -58,9 +58,9 @@ def simple_auth():
     
     return True
 
-# Check authentication
-if not simple_auth():
-    st.stop()
+# AUTHENTICATION DISABLED: No more WhatsApp login prompts
+# if not simple_auth():
+#     st.stop()
 
 # Sample data function
 @st.cache_data

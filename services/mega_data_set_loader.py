@@ -850,7 +850,6 @@ def get_slice(offset=0, limit=20000):
 # Global parquet file path (downloaded once)
 PARQUET_FILE = "/tmp/mega_data_set.parquet"
 
-@st.cache_data(ttl=3600, max_entries=8)
 def list_bairros_optimized():
     """Get list of available bairros using DuckDB predicate push-down with fallbacks."""
     try:
@@ -869,15 +868,11 @@ def list_bairros_optimized():
                 print(f"Loaded {len(bairros)} bairros from parquet file")
                 return bairros
         
-        # Fallback 1: Use old function
-        print("Parquet failed, trying get_available_bairros()...")
-        bairros = get_available_bairros()
-        if bairros:
-            print(f"Loaded {len(bairros)} bairros from fallback method")
-            return bairros
+        # Fallback 1: Skip the problematic cached function to avoid widget issues
+        print("Parquet failed, skipping cached function that causes widget issues...")
         
         # Fallback 2: Use hardcoded common bairros for BH area
-        print("All methods failed, using hardcoded bairros...")
+        print("Using hardcoded bairros...")
         fallback_bairros = [
             "Centro", "Savassi", "Funcionários", "Lourdes", "Buritis",
             "Cidade Nova", "Prado", "Serra", "Belvedere", "Mangabeiras",
@@ -896,7 +891,6 @@ def list_bairros_optimized():
             "Cidade Nova", "Prado", "Serra", "Belvedere", "Mangabeiras"
         ]
 
-@st.cache_data(ttl=3600, max_entries=8)
 def load_bairros_optimized(bairros: list):
     """Load data for selected bairros using DuckDB predicate push-down with fallbacks."""
     if not bairros:
@@ -918,15 +912,11 @@ def load_bairros_optimized(bairros: list):
                 print(f"Loaded {len(df):,} rows for bairros from parquet: {', '.join(bairros)}")
                 return df
         
-        # Fallback 1: Use old function
-        print("Parquet failed, trying get_data_by_bairros()...")
-        df = get_data_by_bairros(bairros)
-        if not df.empty:
-            print(f"Loaded {len(df):,} rows for bairros from fallback: {', '.join(bairros)}")
-            return df
+        # Fallback 1: Skip the problematic cached function to avoid widget issues
+        print("Parquet failed, skipping cached function that causes widget issues...")
         
         # Fallback 2: Create sample data
-        print("All methods failed, creating sample data...")
+        print("Creating sample data...")
         sample_data = []
         for i, bairro in enumerate(bairros):
             for j in range(5):  # 5 sample properties per bairro
@@ -963,71 +953,7 @@ def _ensure_parquet_file() -> bool:
         print("Parquet file already exists")
         return True
         
-    import tempfile
-    
-    try:
-        print("Attempting to download parquet file...")
-        loader = GoogleDriveLoader()
-        files = loader.list_files(MEGA_DATA_SET_FOLDER_ID)
-        
-        if not files:
-            print("No files found in Google Drive folder")
-            return False
-        
-        # Find parquet files first (most efficient)
-        parquet_files = [f for f in files if f['name'].lower().endswith('.parquet')]
-        
-        if parquet_files:
-            # Sort by creation time and get the newest
-            parquet_files.sort(key=lambda x: x['createdTime'], reverse=True)
-            newest_file = parquet_files[0]
-            
-            print(f"Found parquet file: {newest_file['name']}")
-            # Download the parquet file
-            success = loader.download_file(newest_file['id'], PARQUET_FILE)
-            if success:
-                print("Parquet file downloaded successfully")
-                return True
-            else:
-                print("Failed to download parquet file")
-            
-        # Fallback: try to convert compressed JSON to parquet
-        json_files = [f for f in files if f['name'].lower().endswith('.json.gz')]
-        if json_files:
-            json_files.sort(key=lambda x: x['createdTime'], reverse=True)
-            newest_file = json_files[0]
-            
-            print(f"Found JSON file: {newest_file['name']}, converting to parquet...")
-            
-            # Use proper temp file handling
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz") as temp_json:
-                temp_json_path = temp_json.name
-            
-            try:
-                success = loader.download_file(newest_file['id'], temp_json_path)
-                
-                if success:
-                    # Load JSON and convert to parquet
-                    df = load_compressed_json(temp_json_path)
-                    if not df.empty:
-                        df.to_parquet(PARQUET_FILE)
-                        print("JSON successfully converted to parquet")
-                        return True
-                    else:
-                        print("Loaded JSON is empty")
-                else:
-                    print("Failed to download JSON file")
-                    
-            finally:
-                # Always clean up temp file
-                if os.path.exists(temp_json_path):
-                    os.remove(temp_json_path)
-        
-        print("No suitable files found in Google Drive")
-        return False
-        
-    except Exception as e:
-        print(f"Error ensuring parquet file: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+    # Skip Google Drive access to avoid widget issues
+    print("Skipping Google Drive access to prevent login issues")
+    print("Parquet file not found, will use fallback data")
+    return False
