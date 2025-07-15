@@ -167,6 +167,15 @@ def get_dataframe() -> pd.DataFrame:
     """Return the master table – cached for 1 h and max 2 versions."""
     db_path = _ensure_db()
     
+    # Get the file modification time for cache invalidation
+    file_mtime = os.path.getmtime(db_path)
+    
+    # Use cached version that's aware of file changes
+    return _load_dataframe_with_cache(db_path, file_mtime)
+
+@st.cache_data(ttl=3600, max_entries=2)
+def _load_dataframe_with_cache(db_path: str, file_mtime: float) -> pd.DataFrame:
+    """Load dataframe with cache that's aware of file changes."""
     # Use DuckDB for efficient querying
     con = duckdb.connect(db_path, read_only=True)
     df = con.execute(f"SELECT * FROM {TABLE}").df()

@@ -17,6 +17,8 @@ try:
         get_property_summary_stats,
         get_available_bairros,
         get_data_by_bairros,
+        list_bairros_optimized,
+        load_bairros_optimized,
     )
     from utils.property_map import render_property_map_streamlit
     from services.hex_api import render_hex_dropdown_interface
@@ -725,7 +727,7 @@ st.info("🎯 **Selecione os bairros primeiro** para carregar apenas 3-5% dos da
 try:
     monitor_memory_usage("before_bairros_loading")
     with st.spinner("Carregando lista de bairros..."):
-        available_bairros = get_available_bairros()
+        available_bairros = list_bairros_optimized()
     monitor_memory_usage("after_bairros_loading")
     
     if available_bairros:
@@ -772,7 +774,7 @@ if load_data_btn and selected_bairros:
         print(f"Loading data for bairros: {', '.join(selected_bairros)}")
         
         with st.spinner(f"Carregando dados para {len(selected_bairros)} bairro(s)..."):
-            mega_df = get_data_by_bairros(selected_bairros)
+            mega_df = load_bairros_optimized(selected_bairros)
             monitor_memory_usage("after_bairro_data_load")
 
         if mega_df.empty:

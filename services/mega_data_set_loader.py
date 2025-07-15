@@ -20,9 +20,9 @@ CACHE_DURATION = 3600  # 1 hour in seconds
 # Replace this with the actual path to your 350k+ row file
 MANUAL_MEGA_DATA_SET_PATH = None  # e.g., "/path/to/your/real_mega_data_set.csv"
 
-# Global variable to store cached data
-_cached_mega_data = None
-_cache_timestamp = 0
+# Global variable to store cached data - REMOVED: using @st.cache_data instead to avoid double-caching
+# _cached_mega_data = None
+# _cache_timestamp = 0
 
 def load_compressed_json(file_path):
     """
@@ -245,14 +245,7 @@ def load_mega_data_set() -> pd.DataFrame:
     Load the mega_data_set file into a pandas DataFrame.
     Uses caching to avoid repeated downloads.
     """
-    global _cached_mega_data, _cache_timestamp
-    
-    # Check if we have cached data that's still valid
-    current_time = time.time()
-    if (_cached_mega_data is not None and 
-        (current_time - _cache_timestamp) < CACHE_DURATION):
-        print("Using cached mega_data_set")
-        return _cached_mega_data
+    # Note: Manual caching removed - using @st.cache_data instead to avoid double-caching
     
     # First check if manual path is configured
     file_path = None
@@ -340,9 +333,7 @@ def load_mega_data_set() -> pd.DataFrame:
                 print("Failed to load mega_data_set with any encoding")
                 return pd.DataFrame()
         
-        # Cache the data
-        _cached_mega_data = df
-        _cache_timestamp = current_time
+        # Note: Manual caching removed - using @st.cache_data instead
         
         print(f"Loaded mega_data_set: {len(df)} rows, {len(df.columns)} columns")
         print(f"Columns: {list(df.columns)}")
@@ -647,11 +638,7 @@ def get_property_summary_stats() -> Dict:
 
 def clear_cache():
     """Clear the cached mega_data_set."""
-    global _cached_mega_data, _cache_timestamp
-    _cached_mega_data = None
-    _cache_timestamp = 0
-    
-    # Also clear Streamlit cache
+    # Note: Manual caching removed - only clear Streamlit cache
     if hasattr(st, 'cache_data'):
         st.cache_data.clear()
 
@@ -858,3 +845,109 @@ def get_slice(offset=0, limit=20000):
     except Exception as e:
         print(f"Error getting slice: {e}")
         return pd.DataFrame()
+
+# CRITICAL FIX: DuckDB predicate push-down for memory efficiency
+# Global parquet file path (downloaded once)
+PARQUET_FILE = "/tmp/mega_data_set.parquet"
+
+@st.cache_data(ttl=3600, max_entries=8)
+def list_bairros_optimized():
+    """Get list of available bairros using DuckDB predicate push-down."""
+    try:
+        # Ensure parquet file exists
+        if not _ensure_parquet_file():
+            return []
+        
+        # Use DuckDB to efficiently query just the BAIRRO column
+        result = duckdb.sql(f"""
+            SELECT DISTINCT BAIRRO
+            FROM read_parquet('{PARQUET_FILE}')
+            WHERE BAIRRO IS NOT NULL
+            ORDER BY BAIRRO
+        """).fetchall()
+        
+        return [row[0] for row in result]
+        
+    except Exception as e:
+        print(f"Error getting bairros list: {e}")
+        return []
+
+@st.cache_data(ttl=3600, max_entries=8)
+def load_bairros_optimized(bairros: list):
+    """Load data for selected bairros using DuckDB predicate push-down."""
+    if not bairros:
+        return pd.DataFrame()
+        
+    try:
+        # Ensure parquet file exists
+        if not _ensure_parquet_file():
+            return pd.DataFrame()
+        
+        # Use DuckDB with parameterized query for efficiency
+        placeholders = ','.join(['?' for _ in bairros])
+        sql = f"""
+            SELECT *
+            FROM read_parquet('{PARQUET_FILE}')
+            WHERE BAIRRO IN ({placeholders})
+        """
+        df = duckdb.sql(sql, bairros).df()
+        
+        print(f"Loaded {len(df):,} rows for bairros: {', '.join(bairros)}")
+        return df
+        
+    except Exception as e:
+        print(f"Error loading bairros data: {e}")
+        return pd.DataFrame()
+
+def _ensure_parquet_file() -> bool:
+    """Ensure parquet file exists, download if needed."""
+    if os.path.exists(PARQUET_FILE):
+        return True
+        
+    import tempfile
+    
+    try:
+        loader = GoogleDriveLoader()
+        files = loader.list_files(MEGA_DATA_SET_FOLDER_ID)
+        
+        # Find parquet files first (most efficient)
+        parquet_files = [f for f in files if f['name'].lower().endswith('.parquet')]
+        
+        if parquet_files:
+            # Sort by creation time and get the newest
+            parquet_files.sort(key=lambda x: x['createdTime'], reverse=True)
+            newest_file = parquet_files[0]
+            
+            # Download the parquet file
+            success = loader.download_file(newest_file['id'], PARQUET_FILE)
+            return success
+            
+        # Fallback: try to convert compressed JSON to parquet
+        json_files = [f for f in files if f['name'].lower().endswith('.json.gz')]
+        if json_files:
+            json_files.sort(key=lambda x: x['createdTime'], reverse=True)
+            newest_file = json_files[0]
+            
+            # Use proper temp file handling
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".json.gz") as temp_json:
+                temp_json_path = temp_json.name
+            
+            try:
+                success = loader.download_file(newest_file['id'], temp_json_path)
+                
+                if success:
+                    # Load JSON and convert to parquet
+                    df = load_compressed_json(temp_json_path)
+                    df.to_parquet(PARQUET_FILE)
+                    return True
+                    
+            finally:
+                # Always clean up temp file
+                if os.path.exists(temp_json_path):
+                    os.remove(temp_json_path)
+        
+        return False
+        
+    except Exception as e:
+        print(f"Error ensuring parquet file: {e}")
+        return False

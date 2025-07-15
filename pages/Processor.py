@@ -237,21 +237,19 @@ DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
 # Display preloader status in sidebar
 display_preloader_status()
 
-# LOGIN_ENABLED flag - can be controlled via environment variable or hardcoded
-LOGIN_ENABLED = False  # Default value - disabled for production
+# LOGIN_ENABLED flag - HARDCODED TO FALSE to prevent WhatsApp login issues
+LOGIN_ENABLED = False  # ALWAYS disabled - no more login prompts
 
 HIGHLIGHT_ENABLE = False
 
-# Try to get from environment variable first
-if "LOGIN_ENABLED" in os.environ:
-    env_value = os.environ["LOGIN_ENABLED"].lower()
-    LOGIN_ENABLED = env_value in ("true", "1", "yes", "on")
-# Try to get from Streamlit secrets if available
-elif hasattr(st, "secrets") and "LOGIN_ENABLED" in st.secrets:
-    LOGIN_ENABLED = st.secrets["LOGIN_ENABLED"]
-# For DEV environment, you might want to disable login by default
-elif DEV:
-    LOGIN_ENABLED = False  # Disable login in DEV mode by default
+# LOGIN DISABLED: Commenting out all login logic to prevent any prompts
+# if "LOGIN_ENABLED" in os.environ:
+#     env_value = os.environ["LOGIN_ENABLED"].lower()
+#     LOGIN_ENABLED = env_value in ("true", "1", "yes", "on")
+# elif hasattr(st, "secrets") and "LOGIN_ENABLED" in st.secrets:
+#     LOGIN_ENABLED = st.secrets["LOGIN_ENABLED"]
+# elif DEV:
+#     LOGIN_ENABLED = False
 
 # ─── AUTHENTICATION ─────────────────────────────────────────────────────
 # Check authentication only if LOGIN_ENABLED is True
