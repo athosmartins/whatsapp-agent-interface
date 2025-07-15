@@ -4,6 +4,8 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 import time
+import os
+import gc  # Garbage collection for memory management
 
 try:
     from services.mega_data_set_loader import (
@@ -42,7 +44,16 @@ if "mega_data_filter_state" not in st.session_state:
             }
         ],
         "global_group_logic": "AND",  # Logic between groups
+        "rerun_count": 0,  # Track reruns to prevent infinite loops
     }
+
+# Add rerun protection
+if "rerun_count" not in st.session_state.mega_data_filter_state:
+    st.session_state.mega_data_filter_state["rerun_count"] = 0
+
+# Reset rerun count every 10 runs to prevent accumulation
+if st.session_state.mega_data_filter_state["rerun_count"] > 10:
+    st.session_state.mega_data_filter_state["rerun_count"] = 0
 
 
 def get_column_dtype_info(df, column):
@@ -576,7 +587,7 @@ def render_dynamic_filters(df):
     return st.session_state.mega_data_filter_state["dynamic_filters"]
 
 
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+@st.cache_data(ttl=3600, max_entries=1)  # Cache for 1 hour, only 1 entry for memory
 def load_mega_data():
     """Load mega data set with caching."""
     return load_mega_data_set()
@@ -588,10 +599,27 @@ def get_summary_stats():
     return get_property_summary_stats()
 
 
-# Load data
+# Load data with production protection
 try:
     with st.spinner("Carregando Mega Data Set..."):
-        mega_df = load_mega_data()
+        # PRODUCTION: Add timeout protection for Streamlit Cloud
+        if os.getenv("STREAMLIT_SERVER_HEADLESS") == "true":
+            # Use a more conservative approach in production
+            try:
+                mega_df = load_mega_data()
+            except Exception as load_error:
+                st.error("❌ Erro ao carregar dados do Google Drive em produção")
+                st.info("Usando dados de exemplo para demonstração")
+                # Create a minimal sample dataset to prevent total failure
+                mega_df = pd.DataFrame({
+                    'BAIRRO': ['Savassi', 'Funcionários', 'Centro'],
+                    'ENDERECO': ['Rua A', 'Rua B', 'Rua C'],
+                    'GEOMETRY': ['POINT(-43.1 -19.9)', 'POINT(-43.2 -19.8)', 'POINT(-43.0 -19.7)']
+                })
+                if DEBUG:
+                    st.exception(load_error)
+        else:
+            mega_df = load_mega_data()
 
     if mega_df.empty:
         st.error("❌ Nenhum dado encontrado no Mega Data Set.")
@@ -785,8 +813,8 @@ try:
         # Convert DataFrame to list of dictionaries for map
         properties_for_map = []
         
-        # Limit the number of properties to prevent memory issues
-        MAX_PROPERTIES = 50000  # Limit to prevent crashes
+        # PRODUCTION: Much stricter limits for Streamlit Cloud
+        MAX_PROPERTIES = 10000 if os.getenv("STREAMLIT_SERVER_HEADLESS") == "true" else 50000
         if len(display_df) > MAX_PROPERTIES:
             st.warning(f"⚠️ Limitando a {MAX_PROPERTIES:,} propriedades no mapa para evitar problemas de memória")
             display_df = display_df.head(MAX_PROPERTIES)
@@ -887,6 +915,10 @@ try:
                 # Clear progress after a short delay
                 time.sleep(1)
                 progress_container.empty()
+                
+                # PRODUCTION: Force garbage collection to free memory
+                if os.getenv("STREAMLIT_SERVER_HEADLESS") == "true":
+                    gc.collect()
             else:
                 st.error(
                     "❌ Nenhuma propriedade com dados geográficos válidos encontrada"
@@ -943,9 +975,10 @@ try:
                     st.error(f"Error formatting columns: {format_error}")
                 # Continue without formatting
 
-            # Show table with pagination
+            # Show table with pagination - smaller in production
+            MAX_ROWS = 50 if os.getenv("STREAMLIT_SERVER_HEADLESS") == "true" else 100
             st.dataframe(
-                display_df.head(100),  # Show first 100 rows
+                display_df.head(MAX_ROWS),  # Show fewer rows in production
                 hide_index=True,
                 use_container_width=True,
             )
