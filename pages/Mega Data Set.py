@@ -731,7 +731,12 @@ try:
     monitor_memory_usage("after_bairros_loading")
     
     if available_bairros:
-        st.success(f"✅ Encontrados {len(available_bairros)} bairros disponíveis")
+        is_fallback = len(available_bairros) <= 28  # Likely using hardcoded fallback
+        if is_fallback:
+            st.warning(f"⚠️ Usando {len(available_bairros)} bairros de exemplo (dados reais indisponíveis)")
+            st.info("💡 Os bairros abaixo são comuns em Belo Horizonte. Selecione alguns para continuar.")
+        else:
+            st.success(f"✅ Encontrados {len(available_bairros)} bairros disponíveis")
         
         # Bairro selection
         col1, col2 = st.columns([1, 2])
@@ -757,6 +762,7 @@ try:
                 load_data_btn = False
     else:
         st.error("❌ Não foi possível carregar a lista de bairros")
+        st.info("🔧 Tente recarregar a página ou entre em contato com o suporte")
         load_data_btn = False
         
 except Exception as e:
