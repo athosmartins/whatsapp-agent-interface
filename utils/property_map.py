@@ -857,22 +857,41 @@ def render_property_map_streamlit(
             m.get_root().html.add_child(folium.Element(legend_html))
 
         # Render map in Streamlit with full width and reasonable height
-        map_data = st_folium.st_folium(m, use_container_width=True, height=600)
+        # Use key parameter to maintain map state and prevent unnecessary reruns
+        map_key = f"property_map_{len(properties)}_{hash(str(sorted(properties[0].keys()) if properties else []))}"
+        map_data = st_folium.st_folium(
+            m, 
+            use_container_width=True, 
+            height=600,
+            key=map_key
+        )
         
-        # Debug: Show current map state
+        # Debug: Show current map state (only if data actually changed)
         if st.session_state.get('debug_mode', False):
             if map_data and 'zoom' in map_data:
-                st.write(f"🔍 Current Map Zoom Level: **{map_data['zoom']}**")
+                # Only show debug info if it's different from previous state
+                prev_zoom = st.session_state.get('prev_map_zoom', None)
+                if prev_zoom != map_data['zoom']:
+                    st.write(f"🔍 Current Map Zoom Level: **{map_data['zoom']}**")
+                    st.session_state.prev_map_zoom = map_data['zoom']
+            
             if map_data and 'center' in map_data:
                 center = map_data['center']
-                st.write(f"📍 Current Map Center: **[{center['lat']:.6f}, {center['lng']:.6f}]**")
+                prev_center = st.session_state.get('prev_map_center', None)
+                if prev_center != center:
+                    st.write(f"📍 Current Map Center: **[{center['lat']:.6f}, {center['lng']:.6f}]**")
+                    st.session_state.prev_map_center = center
+            
             if map_data and 'bounds' in map_data:
                 bounds = map_data['bounds']
-                st.write(f"📐 Current Map Bounds:")
-                st.write(f"   - North: {bounds['_northEast']['lat']:.6f}")
-                st.write(f"   - South: {bounds['_southWest']['lat']:.6f}")
-                st.write(f"   - East: {bounds['_northEast']['lng']:.6f}")
-                st.write(f"   - West: {bounds['_southWest']['lng']:.6f}")
+                prev_bounds = st.session_state.get('prev_map_bounds', None)
+                if prev_bounds != bounds:
+                    st.write(f"📐 Current Map Bounds:")
+                    st.write(f"   - North: {bounds['_northEast']['lat']:.6f}")
+                    st.write(f"   - South: {bounds['_southWest']['lat']:.6f}")
+                    st.write(f"   - East: {bounds['_northEast']['lng']:.6f}")
+                    st.write(f"   - West: {bounds['_southWest']['lng']:.6f}")
+                    st.session_state.prev_map_bounds = bounds
 
         # Advanced options button below the map (with reduced spacing)
         if advanced_options_enabled:
@@ -889,9 +908,12 @@ def render_property_map_streamlit(
             )
             
             if st.button("🛠️ Opções Avançadas do Mapa"):
-                st.session_state.show_advanced_options = not (
-                    st.session_state.get("show_advanced_options", False)
-                )
+                # Toggle advanced options without triggering a rerun
+                current_state = st.session_state.get("show_advanced_options", False)
+                st.session_state.show_advanced_options = not current_state
+                # Only rerun if this is a meaningful change
+                if current_state != st.session_state.show_advanced_options:
+                    st.rerun()
 
             if st.session_state.get("show_advanced_options", False):
                 st.markdown("---")
@@ -1085,11 +1107,33 @@ def render_property_map_streamlit(
                 col1, col2 = st.columns([1, 3])
                 with col1:
                     if st.button("🔄 Aplicar Configurações", type="primary"):
-                        st.rerun()
+                        # Only reload if there are actual changes
+                        current_settings = {
+                            'map_style': st.session_state.get('advanced_map_style', 'Light'),
+                            'show_markers': st.session_state.get('advanced_show_markers', True),
+                            'show_polygons': st.session_state.get('advanced_show_polygons', True),
+                            'marker_cluster': st.session_state.get('advanced_marker_cluster', True),
+                            'polygon_opacity': st.session_state.get('advanced_polygon_opacity', 0.6),
+                            'polygon_weight': st.session_state.get('advanced_polygon_weight', 2),
+                            'show_legend': st.session_state.get('advanced_show_legend', True),
+                            'show_tooltips': st.session_state.get('advanced_show_tooltips', True),
+                            'color_by_column': st.session_state.get('advanced_color_by_column', 'None'),
+                            'tooltip_fields': st.session_state.get('advanced_tooltip_fields', []),
+                            'popup_fields': st.session_state.get('advanced_popup_fields', [])
+                        }
+                        
+                        # Check if settings changed from last applied settings
+                        last_applied = st.session_state.get('last_applied_map_settings', {})
+                        if current_settings != last_applied:
+                            st.session_state.last_applied_map_settings = current_settings
+                            st.rerun()
+                        else:
+                            st.info("✅ Configurações já aplicadas - nenhuma mudança detectada!")
+                            
                 with col2:
                     st.info(
-                        "💡 Clique em 'Aplicar Configurações' para atualizar "
-                        "o mapa com suas alterações."
+                        "💡 Clique em 'Aplicar Configurações' apenas quando fizer alterações "
+                        "para atualizar o mapa."
                     )
 
     except ImportError:

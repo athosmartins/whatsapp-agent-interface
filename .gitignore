@@ -18,6 +18,11 @@ CLAUDE.md
 # Temporary analysis files
 analysis_temp/
 
+# Python virtual environment
+.venv/
+venv/
+env/
+
 # Security - API Keys and Secrets
 .secrets.toml
 secrets.toml

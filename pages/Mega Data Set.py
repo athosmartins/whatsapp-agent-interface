@@ -411,7 +411,7 @@ def render_dynamic_filters(df):
         st.session_state.mega_data_filter_state["dynamic_filters"]
     ):
         with st.expander(f"Filtro {i+1}", expanded=True):
-            col1, col2, col3, col4 = st.columns([3, 2, 3, 1])
+            col1, col2, col3, col4 = st.columns([2.5, 2, 4, 0.5])
 
             with col1:
                 # Column selection
@@ -783,7 +783,6 @@ if load_data_btn and selected_bairros:
         memory_savings = (1 - len(selected_bairros) / len(available_bairros)) * 100
         
         st.success(f"🎯 Carregados {len(mega_df):,} registros para {len(selected_bairros)} bairro(s)")
-        st.info(f"💾 Economia de memória estimada: {memory_savings:.1f}% (vs carregar todos os {len(available_bairros)} bairros)")
         
         # Add row cap warning for large datasets
         if len(mega_df) > 100000:
@@ -830,7 +829,7 @@ if DEBUG:
 # Filter section - moved outside DEBUG block
 
 # Bairro filter with cascading (integrated into main filter area)
-col1, col2 = st.columns([1, 2])
+col1, col2 = st.columns([2, 1])
 
 with col1:
     # Get current selections first
@@ -961,9 +960,6 @@ with col1:
 
     # Hex API Integration Section
     if total_applied_filters > 0 and len(filtered_df) > 0:
-
-        # Description row - prominently display final filter count
-        st.success(f"🎯 **{len(filtered_df):,} propriedades selecionadas para o mapa**")
 
         # Dropdown interface
         render_hex_dropdown_interface(filtered_df, funnel="mega_data_set")

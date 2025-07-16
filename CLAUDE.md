@@ -57,23 +57,6 @@ This is a WhatsApp conversation processor for real estate lead qualification. Th
 - **Property Cross-Reference**: Clickable property listings that show all conversations related to the same property
 - **Mega Data Set Integration**: Automatic property lookup using phone number → CPF → property mapping
 
-### Message Display System
-
-The conversation history uses a WhatsApp-style chat interface with:
-- **Fixed-width containers** (max-width: 400px) for consistent message display
-- **Proper text wrapping** that maximizes horizontal space usage
-- **Date headers** in Portuguese with context-aware formatting (Hoje, Ontem, etc.)
-- **Responsive message bubbles** with different colors for sent/received messages
-- **Optimized CSS** using `display: inline-block` for natural text flow
-
-### Property Cross-Reference System
-
-The property listings in the Processor interface include interactive features:
-- **Clickable Properties**: Each property has a "🔍" button that shows related conversations. The button is active when related conversations exist, greyed out when none found
-- **Related Conversations**: Displays a dataframe with columns: classificacao, display_name, expected_name, phone, status
-- **Debug Information**: Comprehensive logging when debug mode is enabled
-- **Session State Management**: Uses session state to manage modal visibility and data
-
 ### Mega Data Set Integration
 
 The system includes comprehensive property data integration via the mega_data_set:
@@ -86,6 +69,15 @@ The system includes comprehensive property data integration via the mega_data_se
 - **Fallback System**: Uses sample data when real mega_data_set is not accessible
 - **Caching**: Implements intelligent caching to avoid repeated file downloads
 - **Debug Support**: Comprehensive debugging shows every step of the mapping process
+
+## Data pipeline
+1. Download **Parquet** from Drive folder `1yFh…`; fallback DuckDB → JSON.gz → CSV.  
+2. `loaders/db_loader` pulls WhatsApp `.db`.  
+3. Pages call `get_dataframe()` / `get_properties()` (both `st.cache_data(ttl=3600, max_entries=1)`).  
+4. Column projection + push‑down keep RSS < 1 GB and WebSocket < 200 MB.
+
+## Resource limits (Community Cloud)
+- CPU ≤ 2 cores, RAM ≤ 2.7 GB, WebSocket message ≤ 200 MB :contentReference[oaicite:5]{index=5}  
 
 ### Important Notes
 
@@ -123,7 +115,7 @@ The system includes comprehensive property data integration via the mega_data_se
 - **User Feedback**: Ensure users get clear feedback on all actions, especially errors
 
 ### Code Quality
-- **Testing in dev**: Always test solutions before marking them as complete. You never need to run a command to test locally, the application will always be up and running on http://localhost:8501/f
+- **Testing in dev**: Always test solutions before marking them as complete. 
 - **Testing in prod**: After you push a code to the remote branch, always test all pages on the production url https://urblink-chat.streamlit.app/ - if you find errors, automatically fix, push them, and test agán
 - **Documentation**: Update documentation when adding new features or changing architecture
 - **Error Recovery**: Implement graceful error handling and recovery mechanisms

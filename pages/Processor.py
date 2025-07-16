@@ -2405,7 +2405,7 @@ with sync_col:
             if pd.isna(field_value):
                 return "FALSE"
             # Handle both Python bool and numpy.bool_
-            if isinstance(field_value, (bool, np.bool_, np.bool)):
+            if isinstance(field_value, (bool, np.bool_)):
                 return "TRUE" if bool(field_value) else "FALSE"
             elif isinstance(field_value, str):
                 return (

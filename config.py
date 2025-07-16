@@ -24,21 +24,14 @@ def get_hex_api_token():
     # 1. Environment variable (most secure)
     token = os.getenv('HEX_API_SECRET')
     if token:
-        print(f"[DEBUG] Found HEX_API_SECRET in environment variables")
         return token
     
     # 2. Streamlit secrets (for Streamlit Cloud)
     try:
         import streamlit as st
         if hasattr(st, 'secrets') and 'HEX_API_SECRET' in st.secrets:
-            print(f"[DEBUG] Found HEX_API_SECRET in Streamlit secrets")
             return st.secrets['HEX_API_SECRET']
-        else:
-            print(f"[DEBUG] Streamlit secrets available: {hasattr(st, 'secrets')}")
-            if hasattr(st, 'secrets'):
-                print(f"[DEBUG] Available secrets keys: {list(st.secrets.keys()) if st.secrets else 'None'}")
-    except Exception as e:
-        print(f"[DEBUG] Error checking Streamlit secrets: {e}")
+    except:
         pass
     
     # 3. Local secrets file (fallback for development)
@@ -46,15 +39,10 @@ def get_hex_api_token():
         import json
         with open('.secrets.json', 'r') as f:
             secrets = json.load(f)
-            token = secrets.get('HEX_API_SECRET', '')
-            if token:
-                print(f"[DEBUG] Found HEX_API_SECRET in .secrets.json")
-                return token
-    except Exception as e:
-        print(f"[DEBUG] Error reading .secrets.json: {e}")
+            return secrets.get('HEX_API_SECRET', '')
+    except:
         pass
     
-    print(f"[DEBUG] HEX_API_SECRET not found in any source")
     return ''
 
 HEX_API_TOKEN = get_hex_api_token()

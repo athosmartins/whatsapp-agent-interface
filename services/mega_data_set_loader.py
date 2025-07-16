@@ -187,25 +187,25 @@ def download_latest_mega_data_set() -> Optional[str]:
             print("No files found in mega_data_set folder")
             return None
         
-        # Prioritize compressed JSON, then Parquet, then CSV for performance
-        compressed_files = [f for f in files if f['name'].lower().endswith('.json.gz')]
+        # Prioritize Parquet files first for optimal performance (65MB vs 110MB)
         parquet_files = [f for f in files if f['name'].lower().endswith('.parquet')]
+        compressed_files = [f for f in files if f['name'].lower().endswith('.json.gz')]
         csv_files = [f for f in files if f['name'].lower().endswith('.csv')]
         
-        if compressed_files:
-            newest_file = compressed_files[0]  # Already sorted by creation time
-            file_extension = '.json.gz'
-            print(f"Using compressed JSON file for optimal performance: {newest_file['name']}")
-        elif parquet_files:
+        if parquet_files:
             newest_file = parquet_files[0]  # Already sorted by creation time
             file_extension = '.parquet'
             print(f"Using Parquet file for optimal performance: {newest_file['name']}")
+        elif compressed_files:
+            newest_file = compressed_files[0]  # Already sorted by creation time
+            file_extension = '.json.gz'
+            print(f"Using compressed JSON file: {newest_file['name']}")
         elif csv_files:
             newest_file = csv_files[0]
             file_extension = '.csv'
             print(f"Using CSV file: {newest_file['name']}")
         else:
-            print("No supported file formats found (looking for .json.gz, .parquet or .csv)")
+            print("No supported file formats found (looking for .parquet, .json.gz or .csv)")
             return None
         
         file_id = newest_file['id']
@@ -652,8 +652,8 @@ def get_available_bairros() -> List[str]:
         loader = GoogleDriveLoader()
         files = loader.list_files(MEGA_DATA_SET_FOLDER_ID)
         
-        # Find compressed JSON or parquet files
-        data_files = [f for f in files if f['name'].lower().endswith(('.json.gz', '.parquet'))]
+        # Find parquet or compressed JSON files (prioritize parquet)
+        data_files = [f for f in files if f['name'].lower().endswith(('.parquet', '.json.gz'))]
         
         if data_files:
             # Sort by creation time and get the newest
@@ -735,7 +735,7 @@ def get_data_by_bairros(selected_bairros: List[str]) -> pd.DataFrame:
         loader = GoogleDriveLoader()
         files = loader.list_files(MEGA_DATA_SET_FOLDER_ID)
         
-        # Find parquet files first (most efficient)
+        # Find parquet files first (most efficient - 65MB vs 110MB)
         parquet_files = [f for f in files if f['name'].lower().endswith('.parquet')]
         
         if parquet_files:
@@ -805,7 +805,7 @@ def get_slice(offset=0, limit=20000):
         loader = GoogleDriveLoader()
         files = loader.list_files(MEGA_DATA_SET_FOLDER_ID)
         
-        # Find the newest parquet file
+        # Find the newest parquet file (prioritized for 65MB vs 110MB efficiency)
         parquet_files = [f for f in files if f['name'].lower().endswith('.parquet')]
         
         if parquet_files:
@@ -859,45 +859,89 @@ if os.path.exists(PARQUET_FILE):
         pass
 
 def list_bairros_optimized():
-    """Get list of available bairros using streaming JSON reading (memory efficient)."""
+    """Get list of available bairros using the most efficient method (Parquet first, then JSON)."""
     try:
-        # Try streaming JSON approach first (no parquet needed)
-        print("Attempting to load bairros using streaming JSON...")
-        
-        # Download the JSON.GZ file
+        # Download the latest file (prioritizes Parquet)
         file_path = download_latest_mega_data_set()
-        if not file_path or not file_path.lower().endswith('.json.gz'):
-            print("No JSON.GZ file found, using fallback bairros")
+        if not file_path:
+            print("No data file found, using fallback bairros")
             return _get_fallback_bairros()
         
-        # Stream through JSON.GZ file to extract just unique bairros
-        bairros_set = set()
-        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
-            # Skip metadata lines
-            line = f.readline()
-            while line and not line.startswith('### DATA ###'):
+        # Handle Parquet files (most efficient)
+        if file_path.lower().endswith('.parquet'):
+            print("Loading bairros from Parquet file using DuckDB...")
+            try:
+                # Use DuckDB for efficient querying
+                query = f"SELECT DISTINCT BAIRRO FROM '{file_path}' WHERE BAIRRO IS NOT NULL ORDER BY BAIRRO"
+                bairros_df = duckdb.query(query).df()
+                bairros = bairros_df['BAIRRO'].tolist()
+                
+                # Clean up downloaded file
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                
+                print(f"Loaded {len(bairros)} bairros from Parquet file")
+                return bairros
+                
+            except Exception as e:
+                print(f"Error loading bairros from Parquet: {e}")
+                # Fall back to pandas approach
+                try:
+                    df = pd.read_parquet(file_path)
+                    bairro_col = None
+                    for col in df.columns:
+                        if 'BAIRRO' in col.upper():
+                            bairro_col = col
+                            break
+                    
+                    if bairro_col:
+                        bairros = df[bairro_col].dropna().unique()
+                        bairros = sorted([str(b) for b in bairros])
+                        
+                        # Clean up downloaded file
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        
+                        print(f"Loaded {len(bairros)} bairros from Parquet file (pandas)")
+                        return bairros
+                        
+                except Exception as e2:
+                    print(f"Error loading bairros from Parquet with pandas: {e2}")
+        
+        # Handle JSON.GZ files (legacy support)
+        elif file_path.lower().endswith('.json.gz'):
+            print("Loading bairros from JSON.GZ file...")
+            bairros_set = set()
+            with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                # Skip metadata lines
                 line = f.readline()
+                while line and not line.startswith('### DATA ###'):
+                    line = f.readline()
+                
+                # Process JSON lines to extract BAIRRO values
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            row = json.loads(line)
+                            bairro = row.get('BAIRRO')
+                            if bairro and bairro.strip():
+                                bairros_set.add(bairro.strip())
+                        except json.JSONDecodeError:
+                            continue  # Skip invalid lines
             
-            # Process JSON lines to extract BAIRRO values
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        row = json.loads(line)
-                        bairro = row.get('BAIRRO')
-                        if bairro and bairro.strip():
-                            bairros_set.add(bairro.strip())
-                    except json.JSONDecodeError:
-                        continue  # Skip invalid lines
+            # Clean up downloaded file
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            
+            # Convert to sorted list
+            bairros = sorted(list(bairros_set))
+            print(f"Loaded {len(bairros)} bairros from JSON.GZ file")
+            return bairros
         
-        # Clean up downloaded file
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        
-        # Convert to sorted list
-        bairros = sorted(list(bairros_set))
-        print(f"Loaded {len(bairros)} bairros from streaming JSON")
-        return bairros
+        else:
+            print(f"Unsupported file format: {file_path}")
+            return _get_fallback_bairros()
         
     except Exception as e:
         print(f"Error in list_bairros_optimized: {e}")
@@ -916,53 +960,96 @@ def _get_fallback_bairros():
     ]
 
 def load_bairros_optimized(bairros: list):
-    """Load data for selected bairros using streaming JSON reading (memory efficient)."""
+    """Load data for selected bairros using the most efficient method (Parquet first, then JSON)."""
     if not bairros:
         return pd.DataFrame()
         
     try:
-        # Try streaming JSON approach first (no parquet needed)
-        print(f"Loading data for {len(bairros)} bairros using streaming JSON...")
-        
-        # Download the JSON.GZ file
+        # Download the latest file (prioritizes Parquet)
         file_path = download_latest_mega_data_set()
-        if not file_path or not file_path.lower().endswith('.json.gz'):
-            print("No JSON.GZ file found, using sample data")
+        if not file_path:
+            print("No data file found, using sample data")
             return _get_sample_data(bairros)
         
-        # Stream through JSON.GZ file to extract rows for selected bairros
-        bairros_set = set(bairros)
-        matching_rows = []
+        # Handle Parquet files (most efficient)
+        if file_path.lower().endswith('.parquet'):
+            print(f"Loading data for {len(bairros)} bairros from Parquet file using DuckDB...")
+            try:
+                # Use DuckDB for efficient filtering
+                bairros_str = "', '".join(bairros)
+                query = f"SELECT * FROM '{file_path}' WHERE BAIRRO IN ('{bairros_str}')"
+                df = duckdb.query(query).df()
+                
+                # Clean up downloaded file
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                
+                print(f"Loaded {len(df):,} rows for bairros from Parquet file: {', '.join(bairros)}")
+                return df
+                
+            except Exception as e:
+                print(f"Error loading bairros from Parquet: {e}")
+                # Fall back to pandas approach
+                try:
+                    df = pd.read_parquet(file_path)
+                    bairro_col = None
+                    for col in df.columns:
+                        if 'BAIRRO' in col.upper():
+                            bairro_col = col
+                            break
+                    
+                    if bairro_col:
+                        filtered_df = df[df[bairro_col].isin(bairros)].copy()
+                        
+                        # Clean up downloaded file
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                        
+                        print(f"Loaded {len(filtered_df):,} rows for bairros from Parquet file (pandas): {', '.join(bairros)}")
+                        return filtered_df
+                        
+                except Exception as e2:
+                    print(f"Error loading bairros from Parquet with pandas: {e2}")
         
-        with gzip.open(file_path, 'rt', encoding='utf-8') as f:
-            # Skip metadata lines
-            line = f.readline()
-            while line and not line.startswith('### DATA ###'):
-                line = f.readline()
+        # Handle JSON.GZ files (legacy support)
+        elif file_path.lower().endswith('.json.gz'):
+            print(f"Loading data for {len(bairros)} bairros from JSON.GZ file...")
+            bairros_set = set(bairros)
+            matching_rows = []
             
-            # Process JSON lines to extract rows for matching bairros
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        row = json.loads(line)
-                        bairro = row.get('BAIRRO')
-                        if bairro and bairro.strip() in bairros_set:
-                            matching_rows.append(row)
-                    except json.JSONDecodeError:
-                        continue  # Skip invalid lines
+            with gzip.open(file_path, 'rt', encoding='utf-8') as f:
+                # Skip metadata lines
+                line = f.readline()
+                while line and not line.startswith('### DATA ###'):
+                    line = f.readline()
+                
+                # Process JSON lines to extract rows for matching bairros
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            row = json.loads(line)
+                            bairro = row.get('BAIRRO')
+                            if bairro and bairro.strip() in bairros_set:
+                                matching_rows.append(row)
+                        except json.JSONDecodeError:
+                            continue  # Skip invalid lines
+            
+            # Clean up downloaded file
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            
+            # Convert to DataFrame
+            if matching_rows:
+                df = pd.DataFrame(matching_rows)
+                print(f"Loaded {len(df):,} rows for bairros from JSON.GZ file: {', '.join(bairros)}")
+                return df
+            else:
+                print("No matching rows found, using sample data")
+                return _get_sample_data(bairros)
         
-        # Clean up downloaded file
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        
-        # Convert to DataFrame
-        if matching_rows:
-            df = pd.DataFrame(matching_rows)
-            print(f"Loaded {len(df):,} rows for bairros from streaming JSON: {', '.join(bairros)}")
-            return df
         else:
-            print("No matching rows found, using sample data")
+            print(f"Unsupported file format: {file_path}")
             return _get_sample_data(bairros)
         
     except Exception as e:
