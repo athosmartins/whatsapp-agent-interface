@@ -959,7 +959,7 @@ def goto_next():
             st.query_params["conversation_id"] = conversation_id
 
 
-nav_prev_col, _, nav_next_col = st.columns([1, 2, 1])
+nav_prev_col, nav_property_col, nav_next_col = st.columns([1, 1, 1])
 with nav_prev_col:
     st.button(
         "⬅️ Anterior",
@@ -968,6 +968,14 @@ with nav_prev_col:
         on_click=goto_prev,
         use_container_width=True,
     )
+with nav_property_col:
+    if st.button(
+        "🏢 Atribuir a Imóvel",
+        key="assign_property",
+        use_container_width=True,
+    ):
+        st.session_state.show_property_assignment = True
+        st.rerun()
 with nav_next_col:
     st.button(
         "Próximo ➡️",
@@ -977,9 +985,28 @@ with nav_next_col:
         use_container_width=True,
     )
 
+# ─── PROPERTY ASSIGNMENT POPUP ──────────────────────────────────────────────
+# Initialize property assignment session state
+if "show_property_assignment" not in st.session_state:
+    st.session_state.show_property_assignment = False
+if "property_assignment_state" not in st.session_state:
+    st.session_state.property_assignment_state = {
+        "bairro_filter": [],
+        "dynamic_filters": [],
+        "selected_property": None,
+        "filter_logic": "AND"
+    }
+
+# Property assignment popup
+if st.session_state.show_property_assignment:
+    show_property_assignment_popup()
+
 # ─── SYNC INITIALIZATION ────────────────────────────────────────────────────
 # Initialize auto-sync for the current conversation
 conversation_id = row.get("conversation_id", row.get("whatsapp_number", ""))
+
+# Store current conversation ID in session state
+st.session_state.current_conversation_id = conversation_id
 
 # Debug conversation ID
 if DEBUG:
@@ -1308,24 +1335,37 @@ with left_col:
 
         # Create a bordered container using native streamlit
         with st.container():
-            # Apply styling to the entire container
-            # st.markdown("""
-            #     <style>
-            #     .imoveis-container {
-            #         border: 1px solid #ddd;
-            #         border-radius: 5px;
-            #         padding: 10px;
-            #         background-color: #f9f9f9;
-            #         margin-bottom: 20px;
-            #         max-height: 400px;
-            #         overflow-y: auto;
-            #     }
-            #     </style>
-            # """, unsafe_allow_html=True)
-
             # Add the custom CSS class
             st.markdown('<div class="imoveis-container">', unsafe_allow_html=True)
 
+            # Check for assigned properties
+            assigned_property = None
+            if "assigned_properties" in st.session_state and conversation_id in st.session_state.assigned_properties:
+                assigned_property = st.session_state.assigned_properties[conversation_id]
+
+            # Show assigned property first if exists
+            if assigned_property:
+                st.markdown("#### 🎯 Propriedade Atribuída")
+                with st.expander("Propriedade Selecionada", expanded=True):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**Bairro:** {assigned_property.get('BAIRRO', 'N/A')}")
+                        st.write(f"**Logradouro:** {assigned_property.get('NOME LOGRADOURO', 'N/A')}")
+                        st.write(f"**Endereço:** {assigned_property.get('ENDERECO', 'N/A')}")
+                    with col2:
+                        st.write(f"**Tipo:** {assigned_property.get('TIPO CONSTRUTIVO', 'N/A')}")
+                        st.write(f"**Área Terreno:** {assigned_property.get('AREA TERRENO', 'N/A')}")
+                        st.write(f"**Área Construção:** {assigned_property.get('AREA CONSTRUCAO', 'N/A')}")
+                    st.write(f"**Índice Cadastral:** {assigned_property.get('INDICE CADASTRAL', 'N/A')}")
+                    
+                    # Remove assignment button
+                    if st.button("🗑️ Remover Atribuição", key="remove_assigned_property"):
+                        del st.session_state.assigned_properties[conversation_id]
+                        st.rerun()
+                
+                st.markdown("#### 📋 Propriedades Associadas (CPF)")
+
+            # Show original imoveis
             if imoveis:
                 for i, item in enumerate(imoveis):
                     if not isinstance(item, dict):
@@ -2436,6 +2476,11 @@ with sync_col:
                 f"inventario_flag: {inventario_val} (type: {type(inventario_val)})"
             )
 
+        # Check for assigned property data
+        assigned_property = None
+        if "assigned_properties" in st.session_state and conversation_id in st.session_state.assigned_properties:
+            assigned_property = st.session_state.assigned_properties[conversation_id]
+
         sync_data = {
             "Classificação do dono do número": safe_get_field(
                 current_row, "classificacao"
@@ -2453,6 +2498,11 @@ with sync_col:
             "intermediador": format_boolean_field(intermediador_val),
             "imovel_em_inventario": format_boolean_field(inventario_val),
             "fup_date": safe_get_field(current_row, "followup_date"),
+            # Property assignment fields
+            "endereco_bairro": assigned_property.get("BAIRRO", "") if assigned_property else "",
+            "endereco": assigned_property.get("ENDERECO", "") if assigned_property else "",
+            "endereco_complemento": assigned_property.get("COMPLEMENTO ENDERECO", "") if assigned_property else "",
+            "indice_cadastral_list": assigned_property.get("INDICE CADASTRAL", "") if assigned_property else "",
         }
 
         # Debug: Show formatted sync data
@@ -2710,5 +2760,244 @@ def show_property_map():
     st.caption(
         f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}"
     )
+
+
+def show_property_assignment_popup():
+    """Show the property assignment popup with cascading filters."""
+    from services.mega_data_set_loader import load_mega_data_set, get_available_bairros
+    
+    # Create a modal-like container
+    with st.container():
+        st.markdown("### 🏢 Atribuir Propriedade")
+        st.markdown("---")
+        
+        # Load mega data set
+        try:
+            mega_df = load_mega_data_set()
+            if mega_df is None or mega_df.empty:
+                st.error("Erro ao carregar o mega data set.")
+                return
+        except Exception as e:
+            st.error(f"Erro ao carregar o mega data set: {e}")
+            return
+        
+        # Get available bairros
+        bairros = get_available_bairros(mega_df)
+        
+        # Bairro filter
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            selected_bairros = st.multiselect(
+                "Selecionar Bairros:",
+                options=bairros,
+                default=st.session_state.property_assignment_state.get("bairro_filter", []),
+                key="property_bairro_filter"
+            )
+            st.session_state.property_assignment_state["bairro_filter"] = selected_bairros
+        
+        # Apply bairro filter
+        filtered_df = mega_df.copy()
+        if selected_bairros:
+            filtered_df = filtered_df[filtered_df["BAIRRO"].isin(selected_bairros)]
+            
+            # Auto-add Nome Logradouro filter when bairro is selected
+            if len(st.session_state.property_assignment_state.get("dynamic_filters", [])) == 0:
+                nome_logradouro_filter = {
+                    "column": "NOME LOGRADOURO",
+                    "operator": "is_one_of",
+                    "value": [],
+                    "enabled": True
+                }
+                st.session_state.property_assignment_state["dynamic_filters"] = [nome_logradouro_filter]
+        
+        # Dynamic filters
+        render_property_dynamic_filters(filtered_df)
+        
+        # Apply dynamic filters
+        final_df = apply_property_filters(filtered_df, st.session_state.property_assignment_state)
+        
+        # Display filtered results
+        if not final_df.empty:
+            st.markdown(f"**Resultados: {len(final_df)} propriedades encontradas**")
+            
+            # Select columns to display
+            display_columns = ["BAIRRO", "NOME LOGRADOURO", "ENDERECO", "TIPO CONSTRUTIVO", "AREA TERRENO", "AREA CONSTRUCAO", "INDICE CADASTRAL"]
+            display_columns = [col for col in display_columns if col in final_df.columns]
+            
+            # Add selection column
+            display_df = final_df.copy()
+            display_df.insert(0, "Selecionar", False)
+            
+            # Show dataframe with selection
+            selection = st.data_editor(
+                display_df[["Selecionar"] + display_columns],
+                column_config={
+                    "Selecionar": st.column_config.CheckboxColumn(
+                        "Selecionar",
+                        help="Selecione uma propriedade",
+                        default=False,
+                    )
+                },
+                disabled=display_columns,
+                hide_index=True,
+                use_container_width=True,
+                key="property_selection"
+            )
+            
+            # Handle selection
+            if st.button("Confirmar Seleção", key="confirm_property_selection"):
+                # Get selected rows
+                selected_mask = selection["Selecionar"] == True
+                selected_indices = selection[selected_mask].index.tolist()
+                
+                if len(selected_indices) == 1:
+                    # Store selected property
+                    selected_property = final_df.iloc[selected_indices[0]]
+                    st.session_state.property_assignment_state["selected_property"] = selected_property.to_dict()
+                    
+                    # Add to conversation property data
+                    conversation_id = st.session_state.get("current_conversation_id", "")
+                    if conversation_id:
+                        if "assigned_properties" not in st.session_state:
+                            st.session_state.assigned_properties = {}
+                        st.session_state.assigned_properties[conversation_id] = selected_property.to_dict()
+                    
+                    st.success("Propriedade atribuída com sucesso!")
+                    st.session_state.show_property_assignment = False
+                    st.rerun()
+                    
+                elif len(selected_indices) > 1:
+                    st.error("Selecione apenas uma propriedade.")
+                else:
+                    st.error("Selecione uma propriedade.")
+        else:
+            st.info("Nenhuma propriedade encontrada com os filtros aplicados.")
+        
+        # Close button
+        if st.button("Fechar", key="close_property_assignment"):
+            st.session_state.show_property_assignment = False
+            st.rerun()
+
+
+def render_property_dynamic_filters(df):
+    """Render dynamic filters for property assignment."""
+    # Get available columns
+    excluded_columns = {"GEOMETRY", "geometry", "id", "ID", "_id", "index"}
+    available_columns = sorted([col for col in df.columns if col not in excluded_columns])
+    
+    # Render existing filters
+    for i, filter_config in enumerate(st.session_state.property_assignment_state["dynamic_filters"]):
+        with st.expander(f"Filtro {i+1}", expanded=True):
+            col1, col2, col3, col4 = st.columns([2.5, 2, 4, 0.5])
+            
+            with col1:
+                # Column selection
+                selected_column = st.selectbox(
+                    "Coluna:",
+                    options=[""] + available_columns,
+                    index=0 if filter_config["column"] is None else available_columns.index(filter_config["column"]) + 1,
+                    key=f"property_filter_column_{i}",
+                )
+                filter_config["column"] = selected_column if selected_column else None
+            
+            with col2:
+                # Operator selection
+                if selected_column:
+                    operators = ["is_one_of", "contains", "equals", "starts_with", "ends_with"]
+                    operator_labels = {
+                        "equals": "Igual a",
+                        "contains": "Contém", 
+                        "starts_with": "Começa com",
+                        "ends_with": "Termina com",
+                        "is_one_of": "É um de",
+                    }
+                    
+                    operator_options = [operator_labels.get(op, op) for op in operators]
+                    default_idx = 0 if filter_config["operator"] == "is_one_of" else 0
+                    
+                    selected_operator_label = st.selectbox(
+                        "Operador:",
+                        options=operator_options,
+                        index=default_idx,
+                        key=f"property_filter_operator_{i}",
+                    )
+                    
+                    # Map back to operator key
+                    reverse_labels = {v: k for k, v in operator_labels.items()}
+                    filter_config["operator"] = reverse_labels[selected_operator_label]
+            
+            with col3:
+                # Value input
+                if selected_column and filter_config["operator"]:
+                    if filter_config["operator"] == "is_one_of":
+                        # Multi-select for categorical values
+                        unique_values = sorted(df[selected_column].dropna().unique())
+                        selected_values = st.multiselect(
+                            "Valores:",
+                            options=unique_values,
+                            default=filter_config.get("value", []),
+                            key=f"property_filter_value_{i}",
+                        )
+                        filter_config["value"] = selected_values
+                    else:
+                        # Text input for other operators
+                        value = st.text_input(
+                            "Valor:",
+                            value=filter_config.get("value", ""),
+                            key=f"property_filter_value_{i}",
+                        )
+                        filter_config["value"] = value
+            
+            with col4:
+                # Remove filter button
+                if st.button("🗑️", key=f"remove_property_filter_{i}"):
+                    st.session_state.property_assignment_state["dynamic_filters"].pop(i)
+                    st.rerun()
+    
+    # Add new filter button
+    if st.button("➕ Adicionar Filtro", key="add_property_filter"):
+        new_filter = {
+            "column": None,
+            "operator": "is_one_of",
+            "value": [],
+            "enabled": True
+        }
+        st.session_state.property_assignment_state["dynamic_filters"].append(new_filter)
+        st.rerun()
+
+
+def apply_property_filters(df, filter_state):
+    """Apply filters to the property dataframe."""
+    filtered_df = df.copy()
+    
+    # Apply dynamic filters
+    for filter_config in filter_state.get("dynamic_filters", []):
+        if not filter_config.get("enabled", True) or not filter_config.get("column"):
+            continue
+            
+        column = filter_config["column"]
+        operator = filter_config["operator"]
+        value = filter_config["value"]
+        
+        if not value:
+            continue
+            
+        try:
+            if operator == "is_one_of":
+                filtered_df = filtered_df[filtered_df[column].isin(value)]
+            elif operator == "contains":
+                filtered_df = filtered_df[filtered_df[column].str.contains(value, case=False, na=False)]
+            elif operator == "equals":
+                filtered_df = filtered_df[filtered_df[column] == value]
+            elif operator == "starts_with":
+                filtered_df = filtered_df[filtered_df[column].str.startswith(value, na=False)]
+            elif operator == "ends_with":
+                filtered_df = filtered_df[filtered_df[column].str.endswith(value, na=False)]
+        except Exception as e:
+            st.error(f"Erro no filtro {column}: {e}")
+            continue
+    
+    return filtered_df
+
 
 # Error handling removed for now - will be added back with proper try/except structure if needed
