@@ -113,6 +113,7 @@ The system includes comprehensive property data integration via the mega_data_se
 - **Error Handling**: Provide detailed error messages and stack traces in debug mode
 - **Performance Monitoring**: Log performance metrics and bottlenecks when debugging
 - **User Feedback**: Ensure users get clear feedback on all actions, especially errors
+- **Capabilites**: if i ask you a task that you can't perform, please search for an MCP that can grant you those capabilites. Then, download, install them and proceed to do the task that you previously couldn't
 
 ### Code Quality
 - **Testing in dev**: Always test solutions before marking them as complete. 

@@ -131,6 +131,9 @@ def _download_from_drive_fallback(dest: str):
     shutil.rmtree(tmp_dir)
 
 
+# Cache to prevent duplicate downloads in the same session
+_db_download_cache = {}
+
 def _ensure_db() -> str:
     """
     Return a local path to an up-to-date DB file.
@@ -140,6 +143,14 @@ def _ensure_db() -> str:
     # On Streamlit Cloud write to /tmp; locally write beside the script
     path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREAMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
     
+    # Check if we already downloaded in this session
+    if path in _db_download_cache:
+        if os.path.isfile(path):
+            return path
+        else:
+            # File was deleted, remove from cache
+            _db_download_cache.pop(path, None)
+    
     # PRODUCTION FIX: Bail out early in production to prevent timeout/OOM
     if os.getenv("STREAMLIT_SERVER_HEADLESS") == "true":
         # In production, use a fallback approach to prevent crashes
@@ -147,6 +158,7 @@ def _ensure_db() -> str:
             # Create a minimal fallback to prevent crashes
             print("Production mode: Using fallback to prevent Drive download timeout")
             _download_from_drive_fallback(path)
+            _db_download_cache[path] = True
         return path
     
     # Check if file exists and its age
@@ -156,9 +168,11 @@ def _ensure_db() -> str:
         if file_age > 3600:  # 1 hour in seconds
             # File is too old, download fresh copy
             _download_from_drive(path)
+            _db_download_cache[path] = True
     else:
         # File doesn't exist, download it
         _download_from_drive(path)
+        _db_download_cache[path] = True
     
     return path
 
@@ -466,7 +480,7 @@ def get_conversations_with_sheets_data() -> pd.DataFrame:
             # Find the celular column in sheets data
             celular_col = None
             for col in sheets_df.columns:
-                if 'celular' in str(col).lower():
+                if col is not None and 'celular' in str(col).lower():
                     celular_col = col
                     break
             
@@ -479,10 +493,12 @@ def get_conversations_with_sheets_data() -> pd.DataFrame:
                     phone = row[celular_col]
                     variants = generate_variants(phone)
                     
-                    for variant in variants:
-                        if variant and variant not in sheet_variants_to_phone:
-                            sheet_variants_to_phone[variant] = phone
-                            sheet_phone_to_data[phone] = row
+                    # Safety check to ensure variants is iterable
+                    if variants:
+                        for variant in variants:
+                            if variant and variant not in sheet_variants_to_phone:
+                                sheet_variants_to_phone[variant] = phone
+                                sheet_phone_to_data[phone] = row
                 
                 # Create additional index for last-8-digit matching
                 sheet_last8_to_phone = {}
@@ -498,30 +514,31 @@ def get_conversations_with_sheets_data() -> pd.DataFrame:
                 
                 for idx, conv_row in conversations_df.iterrows():
                     phone = conv_row['phone_number']
-                    clean_phone = phone.split('@')[0] if '@' in phone else phone
+                    clean_phone = phone.split('@')[0] if phone and '@' in phone else phone
                     variants = generate_variants(clean_phone)
                     
                     # Strategy 1: Try exact variant matching first
                     matched = False
-                    for variant in variants:
-                        if variant in sheet_variants_to_phone:
-                            matched_phone = sheet_variants_to_phone[variant]
-                            sheet_row = sheet_phone_to_data[matched_phone]
-                            
-                            # Combine conversation and sheet data
-                            combined_row = conv_row.copy()
-                            for col in sheet_row.index:
-                                if col not in combined_row.index:
-                                    combined_row[col] = sheet_row[col]
-                            combined_row['match_type'] = 'exact'
-                            
-                            matched_data.append(combined_row)
-                            match_stats['exact'] += 1
-                            matched = True
-                            break
+                    if variants:
+                        for variant in variants:
+                            if variant in sheet_variants_to_phone:
+                                matched_phone = sheet_variants_to_phone[variant]
+                                sheet_row = sheet_phone_to_data[matched_phone]
+                                
+                                # Combine conversation and sheet data
+                                combined_row = conv_row.copy()
+                                for col in sheet_row.index:
+                                    if col not in combined_row.index:
+                                        combined_row[col] = sheet_row[col]
+                                combined_row['match_type'] = 'exact'
+                                
+                                matched_data.append(combined_row)
+                                match_stats['exact'] += 1
+                                matched = True
+                                break
                     
                     # Strategy 2: Try last-8-digit matching if no exact match
-                    if not matched:
+                    if not matched and variants:
                         for variant in variants:
                             if len(variant) >= 8:
                                 last8 = variant[-8:]
