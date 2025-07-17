@@ -45,6 +45,253 @@ from utils.sync_ui import (
 )
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# PROPERTY ASSIGNMENT FUNCTIONS
+# ──────────────────────────────────────────────────────────────────────────────
+
+def show_property_assignment_popup():
+    """Show the property assignment popup with cascading filters."""
+    from services.mega_data_set_loader import load_mega_data_set, get_available_bairros
+    
+    # Create a modal-like container
+    with st.container():
+        st.markdown("### 🏢 Atribuir Propriedade")
+        st.markdown("---")
+        
+        # Load mega data set
+        try:
+            mega_df = load_mega_data_set()
+            if mega_df is None or mega_df.empty:
+                st.error("Erro ao carregar o mega data set.")
+                return
+        except Exception as e:
+            st.error(f"Erro ao carregar o mega data set: {e}")
+            return
+        
+        # Get available bairros
+        bairros = get_available_bairros(mega_df)
+        
+        # Bairro filter
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            selected_bairros = st.multiselect(
+                "Selecionar Bairros:",
+                options=bairros,
+                default=st.session_state.property_assignment_state.get("bairro_filter", []),
+                key="property_bairro_filter"
+            )
+            st.session_state.property_assignment_state["bairro_filter"] = selected_bairros
+        
+        # Apply bairro filter
+        filtered_df = mega_df.copy()
+        if selected_bairros:
+            filtered_df = filtered_df[filtered_df["BAIRRO"].isin(selected_bairros)]
+            
+            # Auto-add Nome Logradouro filter when bairro is selected
+            if len(st.session_state.property_assignment_state.get("dynamic_filters", [])) == 0:
+                nome_logradouro_filter = {
+                    "column": "NOME LOGRADOURO",
+                    "operator": "is_one_of",
+                    "value": [],
+                    "enabled": True
+                }
+                st.session_state.property_assignment_state["dynamic_filters"] = [nome_logradouro_filter]
+        
+        # Dynamic filters
+        render_property_dynamic_filters(filtered_df)
+        
+        # Apply dynamic filters
+        final_df = apply_property_filters(filtered_df, st.session_state.property_assignment_state)
+        
+        # Display filtered results
+        if not final_df.empty:
+            st.markdown(f"**Resultados: {len(final_df)} propriedades encontradas**")
+            
+            # Select columns to display
+            display_columns = ["BAIRRO", "NOME LOGRADOURO", "ENDERECO", "TIPO CONSTRUTIVO", "AREA TERRENO", "AREA CONSTRUCAO", "INDICE CADASTRAL"]
+            display_columns = [col for col in display_columns if col in final_df.columns]
+            
+            # Add selection column
+            display_df = final_df.copy()
+            display_df.insert(0, "Selecionar", False)
+            
+            # Show dataframe with selection
+            selection = st.data_editor(
+                display_df[["Selecionar"] + display_columns],
+                column_config={
+                    "Selecionar": st.column_config.CheckboxColumn(
+                        "Selecionar",
+                        help="Selecione uma propriedade",
+                        default=False,
+                    )
+                },
+                disabled=display_columns,
+                hide_index=True,
+                use_container_width=True,
+                key="property_selection"
+            )
+            
+            # Handle selection
+            if st.button("Confirmar Seleção", key="confirm_property_selection"):
+                # Get selected rows
+                selected_mask = selection["Selecionar"] == True
+                selected_indices = selection[selected_mask].index.tolist()
+                
+                if len(selected_indices) == 1:
+                    # Store selected property
+                    selected_property = final_df.iloc[selected_indices[0]]
+                    st.session_state.property_assignment_state["selected_property"] = selected_property.to_dict()
+                    
+                    # Add to conversation property data
+                    conversation_id = st.session_state.get("current_conversation_id", "")
+                    if conversation_id:
+                        if "assigned_properties" not in st.session_state:
+                            st.session_state.assigned_properties = {}
+                        st.session_state.assigned_properties[conversation_id] = selected_property.to_dict()
+                    
+                    st.success("Propriedade atribuída com sucesso!")
+                    st.session_state.show_property_assignment = False
+                    st.rerun()
+                    
+                elif len(selected_indices) > 1:
+                    st.error("Selecione apenas uma propriedade.")
+                else:
+                    st.error("Selecione uma propriedade.")
+        else:
+            st.info("Nenhuma propriedade encontrada com os filtros aplicados.")
+        
+        # Close button
+        if st.button("Fechar", key="close_property_assignment"):
+            st.session_state.show_property_assignment = False
+            st.rerun()
+
+
+def render_property_dynamic_filters(df):
+    """Render dynamic filters for property assignment."""
+    # Get available columns
+    excluded_columns = {"GEOMETRY", "geometry", "id", "ID", "_id", "index"}
+    available_columns = sorted([col for col in df.columns if col not in excluded_columns])
+    
+    # Render existing filters
+    for i, filter_config in enumerate(st.session_state.property_assignment_state["dynamic_filters"]):
+        with st.expander(f"Filtro {i+1}", expanded=True):
+            col1, col2, col3, col4 = st.columns([2.5, 2, 4, 0.5])
+            
+            with col1:
+                # Column selection
+                selected_column = st.selectbox(
+                    "Coluna:",
+                    options=[""] + available_columns,
+                    index=0 if filter_config["column"] is None else available_columns.index(filter_config["column"]) + 1,
+                    key=f"property_filter_column_{i}",
+                )
+                filter_config["column"] = selected_column if selected_column else None
+            
+            with col2:
+                # Operator selection
+                if selected_column:
+                    operators = ["is_one_of", "contains", "equals", "starts_with", "ends_with"]
+                    operator_labels = {
+                        "equals": "Igual a",
+                        "contains": "Contém", 
+                        "starts_with": "Começa com",
+                        "ends_with": "Termina com",
+                        "is_one_of": "É um de",
+                    }
+                    
+                    operator_options = [operator_labels.get(op, op) for op in operators]
+                    default_idx = 0 if filter_config["operator"] == "is_one_of" else 0
+                    
+                    selected_operator_label = st.selectbox(
+                        "Operador:",
+                        options=operator_options,
+                        index=default_idx,
+                        key=f"property_filter_operator_{i}",
+                    )
+                    
+                    # Map back to operator key
+                    reverse_labels = {v: k for k, v in operator_labels.items()}
+                    filter_config["operator"] = reverse_labels[selected_operator_label]
+            
+            with col3:
+                # Value input
+                if selected_column and filter_config["operator"]:
+                    if filter_config["operator"] == "is_one_of":
+                        # Multi-select for categorical values
+                        unique_values = sorted(df[selected_column].dropna().unique())
+                        selected_values = st.multiselect(
+                            "Valores:",
+                            options=unique_values,
+                            default=filter_config.get("value", []),
+                            key=f"property_filter_value_{i}",
+                        )
+                        filter_config["value"] = selected_values
+                    else:
+                        # Text input for other operators
+                        value = st.text_input(
+                            "Valor:",
+                            value=filter_config.get("value", ""),
+                            key=f"property_filter_value_{i}",
+                        )
+                        filter_config["value"] = value
+            
+            with col4:
+                # Remove filter button
+                if st.button("🗑️", key=f"remove_property_filter_{i}"):
+                    st.session_state.property_assignment_state["dynamic_filters"].pop(i)
+                    st.rerun()
+    
+    # Add new filter button
+    if st.button("➕ Adicionar Filtro", key="add_property_filter"):
+        new_filter = {
+            "column": None,
+            "operator": "is_one_of",
+            "value": [],
+            "enabled": True
+        }
+        st.session_state.property_assignment_state["dynamic_filters"].append(new_filter)
+        st.rerun()
+
+
+def apply_property_filters(df, filter_state):
+    """Apply filters to the property dataframe."""
+    filtered_df = df.copy()
+    
+    # Apply dynamic filters
+    for filter_config in filter_state.get("dynamic_filters", []):
+        if not filter_config.get("enabled", True) or not filter_config.get("column"):
+            continue
+            
+        column = filter_config["column"]
+        operator = filter_config["operator"]
+        value = filter_config["value"]
+        
+        if not value:
+            continue
+            
+        try:
+            if operator == "is_one_of":
+                filtered_df = filtered_df[filtered_df[column].isin(value)]
+            elif operator == "contains":
+                filtered_df = filtered_df[filtered_df[column].str.contains(value, case=False, na=False)]
+            elif operator == "equals":
+                filtered_df = filtered_df[filtered_df[column] == value]
+            elif operator == "starts_with":
+                filtered_df = filtered_df[filtered_df[column].str.startswith(value, na=False)]
+            elif operator == "ends_with":
+                filtered_df = filtered_df[filtered_df[column].str.endswith(value, na=False)]
+        except Exception as e:
+            st.error(f"Erro no filtro {column}: {e}")
+            continue
+    
+    return filtered_df
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# MAIN FUNCTIONS
+# ──────────────────────────────────────────────────────────────────────────────
+
+
 def format_last_message_date(timestamp):
     """Format timestamp to format: 01/Jul/25 (10 dias)"""
     if pd.isna(timestamp) or timestamp == 0 or not timestamp or timestamp == "":
@@ -2760,244 +3007,6 @@ def show_property_map():
     st.caption(
         f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}"
     )
-
-
-def show_property_assignment_popup():
-    """Show the property assignment popup with cascading filters."""
-    from services.mega_data_set_loader import load_mega_data_set, get_available_bairros
-    
-    # Create a modal-like container
-    with st.container():
-        st.markdown("### 🏢 Atribuir Propriedade")
-        st.markdown("---")
-        
-        # Load mega data set
-        try:
-            mega_df = load_mega_data_set()
-            if mega_df is None or mega_df.empty:
-                st.error("Erro ao carregar o mega data set.")
-                return
-        except Exception as e:
-            st.error(f"Erro ao carregar o mega data set: {e}")
-            return
-        
-        # Get available bairros
-        bairros = get_available_bairros(mega_df)
-        
-        # Bairro filter
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            selected_bairros = st.multiselect(
-                "Selecionar Bairros:",
-                options=bairros,
-                default=st.session_state.property_assignment_state.get("bairro_filter", []),
-                key="property_bairro_filter"
-            )
-            st.session_state.property_assignment_state["bairro_filter"] = selected_bairros
-        
-        # Apply bairro filter
-        filtered_df = mega_df.copy()
-        if selected_bairros:
-            filtered_df = filtered_df[filtered_df["BAIRRO"].isin(selected_bairros)]
-            
-            # Auto-add Nome Logradouro filter when bairro is selected
-            if len(st.session_state.property_assignment_state.get("dynamic_filters", [])) == 0:
-                nome_logradouro_filter = {
-                    "column": "NOME LOGRADOURO",
-                    "operator": "is_one_of",
-                    "value": [],
-                    "enabled": True
-                }
-                st.session_state.property_assignment_state["dynamic_filters"] = [nome_logradouro_filter]
-        
-        # Dynamic filters
-        render_property_dynamic_filters(filtered_df)
-        
-        # Apply dynamic filters
-        final_df = apply_property_filters(filtered_df, st.session_state.property_assignment_state)
-        
-        # Display filtered results
-        if not final_df.empty:
-            st.markdown(f"**Resultados: {len(final_df)} propriedades encontradas**")
-            
-            # Select columns to display
-            display_columns = ["BAIRRO", "NOME LOGRADOURO", "ENDERECO", "TIPO CONSTRUTIVO", "AREA TERRENO", "AREA CONSTRUCAO", "INDICE CADASTRAL"]
-            display_columns = [col for col in display_columns if col in final_df.columns]
-            
-            # Add selection column
-            display_df = final_df.copy()
-            display_df.insert(0, "Selecionar", False)
-            
-            # Show dataframe with selection
-            selection = st.data_editor(
-                display_df[["Selecionar"] + display_columns],
-                column_config={
-                    "Selecionar": st.column_config.CheckboxColumn(
-                        "Selecionar",
-                        help="Selecione uma propriedade",
-                        default=False,
-                    )
-                },
-                disabled=display_columns,
-                hide_index=True,
-                use_container_width=True,
-                key="property_selection"
-            )
-            
-            # Handle selection
-            if st.button("Confirmar Seleção", key="confirm_property_selection"):
-                # Get selected rows
-                selected_mask = selection["Selecionar"] == True
-                selected_indices = selection[selected_mask].index.tolist()
-                
-                if len(selected_indices) == 1:
-                    # Store selected property
-                    selected_property = final_df.iloc[selected_indices[0]]
-                    st.session_state.property_assignment_state["selected_property"] = selected_property.to_dict()
-                    
-                    # Add to conversation property data
-                    conversation_id = st.session_state.get("current_conversation_id", "")
-                    if conversation_id:
-                        if "assigned_properties" not in st.session_state:
-                            st.session_state.assigned_properties = {}
-                        st.session_state.assigned_properties[conversation_id] = selected_property.to_dict()
-                    
-                    st.success("Propriedade atribuída com sucesso!")
-                    st.session_state.show_property_assignment = False
-                    st.rerun()
-                    
-                elif len(selected_indices) > 1:
-                    st.error("Selecione apenas uma propriedade.")
-                else:
-                    st.error("Selecione uma propriedade.")
-        else:
-            st.info("Nenhuma propriedade encontrada com os filtros aplicados.")
-        
-        # Close button
-        if st.button("Fechar", key="close_property_assignment"):
-            st.session_state.show_property_assignment = False
-            st.rerun()
-
-
-def render_property_dynamic_filters(df):
-    """Render dynamic filters for property assignment."""
-    # Get available columns
-    excluded_columns = {"GEOMETRY", "geometry", "id", "ID", "_id", "index"}
-    available_columns = sorted([col for col in df.columns if col not in excluded_columns])
-    
-    # Render existing filters
-    for i, filter_config in enumerate(st.session_state.property_assignment_state["dynamic_filters"]):
-        with st.expander(f"Filtro {i+1}", expanded=True):
-            col1, col2, col3, col4 = st.columns([2.5, 2, 4, 0.5])
-            
-            with col1:
-                # Column selection
-                selected_column = st.selectbox(
-                    "Coluna:",
-                    options=[""] + available_columns,
-                    index=0 if filter_config["column"] is None else available_columns.index(filter_config["column"]) + 1,
-                    key=f"property_filter_column_{i}",
-                )
-                filter_config["column"] = selected_column if selected_column else None
-            
-            with col2:
-                # Operator selection
-                if selected_column:
-                    operators = ["is_one_of", "contains", "equals", "starts_with", "ends_with"]
-                    operator_labels = {
-                        "equals": "Igual a",
-                        "contains": "Contém", 
-                        "starts_with": "Começa com",
-                        "ends_with": "Termina com",
-                        "is_one_of": "É um de",
-                    }
-                    
-                    operator_options = [operator_labels.get(op, op) for op in operators]
-                    default_idx = 0 if filter_config["operator"] == "is_one_of" else 0
-                    
-                    selected_operator_label = st.selectbox(
-                        "Operador:",
-                        options=operator_options,
-                        index=default_idx,
-                        key=f"property_filter_operator_{i}",
-                    )
-                    
-                    # Map back to operator key
-                    reverse_labels = {v: k for k, v in operator_labels.items()}
-                    filter_config["operator"] = reverse_labels[selected_operator_label]
-            
-            with col3:
-                # Value input
-                if selected_column and filter_config["operator"]:
-                    if filter_config["operator"] == "is_one_of":
-                        # Multi-select for categorical values
-                        unique_values = sorted(df[selected_column].dropna().unique())
-                        selected_values = st.multiselect(
-                            "Valores:",
-                            options=unique_values,
-                            default=filter_config.get("value", []),
-                            key=f"property_filter_value_{i}",
-                        )
-                        filter_config["value"] = selected_values
-                    else:
-                        # Text input for other operators
-                        value = st.text_input(
-                            "Valor:",
-                            value=filter_config.get("value", ""),
-                            key=f"property_filter_value_{i}",
-                        )
-                        filter_config["value"] = value
-            
-            with col4:
-                # Remove filter button
-                if st.button("🗑️", key=f"remove_property_filter_{i}"):
-                    st.session_state.property_assignment_state["dynamic_filters"].pop(i)
-                    st.rerun()
-    
-    # Add new filter button
-    if st.button("➕ Adicionar Filtro", key="add_property_filter"):
-        new_filter = {
-            "column": None,
-            "operator": "is_one_of",
-            "value": [],
-            "enabled": True
-        }
-        st.session_state.property_assignment_state["dynamic_filters"].append(new_filter)
-        st.rerun()
-
-
-def apply_property_filters(df, filter_state):
-    """Apply filters to the property dataframe."""
-    filtered_df = df.copy()
-    
-    # Apply dynamic filters
-    for filter_config in filter_state.get("dynamic_filters", []):
-        if not filter_config.get("enabled", True) or not filter_config.get("column"):
-            continue
-            
-        column = filter_config["column"]
-        operator = filter_config["operator"]
-        value = filter_config["value"]
-        
-        if not value:
-            continue
-            
-        try:
-            if operator == "is_one_of":
-                filtered_df = filtered_df[filtered_df[column].isin(value)]
-            elif operator == "contains":
-                filtered_df = filtered_df[filtered_df[column].str.contains(value, case=False, na=False)]
-            elif operator == "equals":
-                filtered_df = filtered_df[filtered_df[column] == value]
-            elif operator == "starts_with":
-                filtered_df = filtered_df[filtered_df[column].str.startswith(value, na=False)]
-            elif operator == "ends_with":
-                filtered_df = filtered_df[filtered_df[column].str.endswith(value, na=False)]
-        except Exception as e:
-            st.error(f"Erro no filtro {column}: {e}")
-            continue
-    
-    return filtered_df
 
 
 # Error handling removed for now - will be added back with proper try/except structure if needed
