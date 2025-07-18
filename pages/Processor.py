@@ -18,7 +18,7 @@ from config import (
     STATUS_URBLINK_OPTS,
 )
 from loaders.db_loader import get_dataframe, get_db_info, get_conversation_messages
-from services.spreadsheet import sync_record_to_sheet
+from services.spreadsheet import sync_record_to_sheet, format_phone_for_storage, format_address_field
 from services.voxuy_api import send_whatsapp_message
 from services.mega_data_set_loader import (
     get_properties_for_phone,
@@ -51,6 +51,13 @@ from utils.sync_ui import (
 
 def show_property_assignment_popup():
     """Show the property assignment popup with cascading filters."""
+    # Safety check - only show if we have a valid conversation loaded
+    if not hasattr(st.session_state, 'current_conversation_id') or not st.session_state.current_conversation_id:
+        st.error("Por favor, carregue uma conversa primeiro.")
+        st.session_state.show_property_assignment = False
+        st.rerun()
+        return
+    
     from services.mega_data_set_loader import load_mega_data_set, get_available_bairros
     
     # Create a modal-like container
@@ -69,7 +76,14 @@ def show_property_assignment_popup():
             return
         
         # Get available bairros
-        bairros = get_available_bairros(mega_df)
+        try:
+            bairros = get_available_bairros()
+            if not bairros:
+                st.warning("Nenhum bairro encontrado no mega data set. Usando fallback.")
+                bairros = ["Centro", "Savassi", "Funcionários", "Lourdes", "Buritis", "Pampulha", "Belvedere"]
+        except Exception as e:
+            st.error(f"Erro ao carregar bairros: {e}")
+            return
         
         # Bairro filter
         col1, col2 = st.columns([3, 1])
@@ -108,11 +122,11 @@ def show_property_assignment_popup():
             st.markdown(f"**Resultados: {len(final_df)} propriedades encontradas**")
             
             # Select columns to display
-            display_columns = ["BAIRRO", "NOME LOGRADOURO", "ENDERECO", "TIPO CONSTRUTIVO", "AREA TERRENO", "AREA CONSTRUCAO", "INDICE CADASTRAL"]
+            display_columns = ["BAIRRO", "NOME LOGRADOURO", "ENDERECO", "TIPO CONSTRUTIVO", "AREA TERRENO", "AREA CONSTRUCAO", "INDICE CADASTRAL", "DOCUMENTO PROPRIETARIO", "NOME PROPRIETARIO PBH", "IDADE", "OBITO PROVAVEL"]
             display_columns = [col for col in display_columns if col in final_df.columns]
             
-            # Add selection column
-            display_df = final_df.copy()
+            # Add selection column - reset index to ensure proper mapping
+            display_df = final_df.copy().reset_index(drop=True)
             display_df.insert(0, "Selecionar", False)
             
             # Show dataframe with selection
@@ -133,30 +147,46 @@ def show_property_assignment_popup():
             
             # Handle selection
             if st.button("Confirmar Seleção", key="confirm_property_selection"):
-                # Get selected rows
-                selected_mask = selection["Selecionar"] == True
-                selected_indices = selection[selected_mask].index.tolist()
-                
-                if len(selected_indices) == 1:
-                    # Store selected property
-                    selected_property = final_df.iloc[selected_indices[0]]
-                    st.session_state.property_assignment_state["selected_property"] = selected_property.to_dict()
+                try:
+                    # Get selected rows
+                    selected_mask = selection["Selecionar"] == True
+                    selected_indices = selection[selected_mask].index.tolist()
                     
-                    # Add to conversation property data
-                    conversation_id = st.session_state.get("current_conversation_id", "")
-                    if conversation_id:
-                        if "assigned_properties" not in st.session_state:
-                            st.session_state.assigned_properties = {}
-                        st.session_state.assigned_properties[conversation_id] = selected_property.to_dict()
-                    
-                    st.success("Propriedade atribuída com sucesso!")
-                    st.session_state.show_property_assignment = False
-                    st.rerun()
-                    
-                elif len(selected_indices) > 1:
-                    st.error("Selecione apenas uma propriedade.")
-                else:
-                    st.error("Selecione uma propriedade.")
+                    if len(selected_indices) == 1:
+                        # Get the selected property using the display_df index
+                        selected_idx = selected_indices[0]
+                        if selected_idx < len(display_df):
+                            # Get the property from display_df (which is a copy of final_df with reset index)
+                            selected_property = display_df.iloc[selected_idx]
+                            
+                            # Remove the "Selecionar" column from the property dict
+                            property_dict = selected_property.to_dict()
+                            property_dict.pop("Selecionar", None)
+                            
+                            st.session_state.property_assignment_state["selected_property"] = property_dict
+                            
+                            # Add to conversation property data
+                            conversation_id = st.session_state.get("current_conversation_id", "")
+                            if conversation_id:
+                                if "assigned_properties" not in st.session_state:
+                                    st.session_state.assigned_properties = {}
+                                st.session_state.assigned_properties[conversation_id] = property_dict
+                            
+                            st.success("Propriedade atribuída com sucesso!")
+                            st.session_state.show_property_assignment = False
+                            st.rerun()
+                        else:
+                            st.error("Índice de seleção inválido. Tente novamente.")
+                        
+                    elif len(selected_indices) > 1:
+                        st.error("Selecione apenas uma propriedade.")
+                    else:
+                        st.error("Selecione uma propriedade.")
+                        
+                except Exception as e:
+                    st.error(f"Erro na funcionalidade de atribuição de propriedade: {e}")
+                    import traceback
+                    traceback.print_exc()
         else:
             st.info("Nenhuma propriedade encontrada com os filtros aplicados.")
         
@@ -474,6 +504,18 @@ st.set_page_config(page_title="Processador de Conversas", page_icon="📱", layo
 if "preloader_started" not in st.session_state:
     st.session_state.preloader_started = True
     start_background_preload()
+
+# ─── PROPERTY ASSIGNMENT SESSION STATE INITIALIZATION ──────────────────────
+# Initialize property assignment session state early to prevent errors
+if "show_property_assignment" not in st.session_state:
+    st.session_state.show_property_assignment = False
+if "property_assignment_state" not in st.session_state:
+    st.session_state.property_assignment_state = {
+        "bairro_filter": [],
+        "dynamic_filters": [],
+        "selected_property": None,
+        "filter_logic": "AND"
+    }
 
 # ─── FLAGS ──────────────────────────────────────────────────────────────────
 DEV = True  # Set based on your environment
@@ -1231,22 +1273,6 @@ with nav_next_col:
         on_click=goto_next,
         use_container_width=True,
     )
-
-# ─── PROPERTY ASSIGNMENT POPUP ──────────────────────────────────────────────
-# Initialize property assignment session state
-if "show_property_assignment" not in st.session_state:
-    st.session_state.show_property_assignment = False
-if "property_assignment_state" not in st.session_state:
-    st.session_state.property_assignment_state = {
-        "bairro_filter": [],
-        "dynamic_filters": [],
-        "selected_property": None,
-        "filter_logic": "AND"
-    }
-
-# Property assignment popup
-if st.session_state.show_property_assignment:
-    show_property_assignment_popup()
 
 # ─── SYNC INITIALIZATION ────────────────────────────────────────────────────
 # Initialize auto-sync for the current conversation
@@ -2709,9 +2735,10 @@ with sync_col:
             return value
 
         # Debug: Check boolean values before formatting
-        stakeholder_val = current_row.get("stakeholder", False)
-        intermediador_val = current_row.get("intermediador", False)
-        inventario_val = current_row.get("inventario_flag", False)
+        stakeholder_val = st.session_state.get(f"stakeholder_input_{idx}", current_row.get("stakeholder", False))
+        intermediador_val = st.session_state.get(f"intermediador_input_{idx}", current_row.get("intermediador", False))
+        inventario_val = st.session_state.get(f"inventario_input_{idx}", current_row.get("inventario_flag", False))
+        standby_val = st.session_state.get(f"standby_input_{idx}", current_row.get("standby", False))
 
         if DEV and DEBUG:
             st.write("Debug - Boolean values before sync:")
@@ -2722,6 +2749,7 @@ with sync_col:
             st.write(
                 f"inventario_flag: {inventario_val} (type: {type(inventario_val)})"
             )
+            st.write(f"standby: {standby_val} (type: {type(standby_val)})")
 
         # Check for assigned property data
         assigned_property = None
@@ -2729,27 +2757,42 @@ with sync_col:
             assigned_property = st.session_state.assigned_properties[conversation_id]
 
         sync_data = {
-            "Classificação do dono do número": safe_get_field(
-                current_row, "classificacao"
+            "Classificação do dono do número": st.session_state.get(
+                f"classificacao_select_{idx}", safe_get_field(current_row, "classificacao")
             ),
-            "status_manual": safe_get_field(current_row, "intencao"),
-            "Ações": format_list_field(current_row.get("acoes_urblink", [])),
-            "status_manual_urb.link": safe_get_field(current_row, "status_urblink"),
-            "pagamento": safe_get_field(current_row, "pagamento"),
-            "percepcao_valor_esperado": safe_get_field(
-                current_row, "percepcao_valor_esperado"
+            "status_manual": st.session_state.get(
+                f"intencao_select_{idx}", safe_get_field(current_row, "intencao")
             ),
-            "standby_reason": format_list_field(current_row.get("razao_standby", [])),
-            "OBS": safe_get_field(current_row, "obs"),
+            "Ações": format_list_field(st.session_state.get(f"acoes_select_{idx}", current_row.get("acoes_urblink", []))),
+            "status_manual_urb.link": st.session_state.get(f"status_select_{idx}", safe_get_field(current_row, "status_urblink")),
+            "pagamento": ", ".join(st.session_state.get(
+                f"pagamento_select_{idx}", [safe_get_field(current_row, "pagamento")]
+            )),
+            "percepcao_valor_esperado": st.session_state.get(
+                f"percepcao_select_{idx}", safe_get_field(current_row, "percepcao_valor_esperado")
+            ),
+            "standby_reason": format_list_field(st.session_state.get(f"razao_select_{idx}", current_row.get("razao_standby", []))),
+            "OBS": st.session_state.get(f"obs_input_{idx}", safe_get_field(current_row, "obs")),
             "stakeholder": format_boolean_field(stakeholder_val),
             "intermediador": format_boolean_field(intermediador_val),
             "imovel_em_inventario": format_boolean_field(inventario_val),
+            "standby": format_boolean_field(standby_val),
             "fup_date": safe_get_field(current_row, "followup_date"),
-            # Property assignment fields
-            "endereco_bairro": assigned_property.get("BAIRRO", "") if assigned_property else "",
-            "endereco": assigned_property.get("ENDERECO", "") if assigned_property else "",
-            "endereco_complemento": assigned_property.get("COMPLEMENTO ENDERECO", "") if assigned_property else "",
+            # Property assignment fields (with proper title case formatting)
+            "endereco_bairro": format_address_field(assigned_property.get("BAIRRO", "")) if assigned_property else "",
+            "endereco": format_address_field(assigned_property.get("ENDERECO", "")) if assigned_property else "",
+            "endereco_complemento": format_address_field(assigned_property.get("COMPLEMENTO ENDERECO", "")) if assigned_property else "",
             "indice_cadastral_list": assigned_property.get("INDICE CADASTRAL", "") if assigned_property else "",
+            # Required fields for new row creation
+            "cpf": current_row.get("cpf", ""),
+            "Nome": current_row.get("display_name", ""),
+            "nome_whatsapp": current_row.get("display_name", ""),
+            "celular": format_phone_for_storage(whatsapp_number.split('@')[0] if '@' in whatsapp_number else whatsapp_number),
+            # Additional fields that might be in spreadsheet
+            "imovel_anunciado": format_boolean_field(current_row.get("imovel_anunciado", False)),
+            "Empresa": current_row.get("empresa", ""),
+            "cnpj": current_row.get("cnpj", ""),
+            "OBS_urb.link": current_row.get("obs_urblink", ""),
         }
 
         # Debug: Show formatted sync data
@@ -2761,17 +2804,44 @@ with sync_col:
         # Sync to Google Sheet
         with st.spinner("Syncing to Google Sheet..."):
             try:
-                success = sync_record_to_sheet(sync_data, whatsapp_number, "report")
+                result = sync_record_to_sheet(sync_data, whatsapp_number, "report")
 
-                if success:
-                    st.success("✅ Record synced to Google Sheet!")
+                if result["success"]:
+                    action = result["action"]
+                    row_number = result["row_number"]
+                    
+                    if action == "created":
+                        st.success(f"✅ New row created in Google Sheet! (Row #{row_number})")
+                    elif action == "updated":
+                        st.success(f"✅ Record updated in Google Sheet! (Row #{row_number})")
+                    
                     # Mark as synced in the dataframe
                     st.session_state.master_df.at[idx, "sheet_synced"] = True
+                    
+                    # Show detailed field mapping table
+                    if "field_mappings" in result and result["field_mappings"]:
+                        st.subheader("📊 Sync Results")
+                        mapping_data = []
+                        for field, value in result["field_mappings"].items():
+                            mapping_data.append({
+                                "System Field": field,
+                                "Value": str(value),
+                                "Action": f"{action.title()} in Row #{row_number}"
+                            })
+                        
+                        if mapping_data:
+                            import pandas as pd
+                            df_mapping = pd.DataFrame(mapping_data)
+                            st.dataframe(df_mapping, use_container_width=True)
+                    
+                    if DEV and DEBUG:
+                        st.write("**Full sync result:**", result)
+                        
                 else:
-                    st.error("❌ Failed to sync to Google Sheet")
+                    st.error(f"❌ Failed to sync to Google Sheet: {result.get('error', 'Unknown error')}")
                     if DEV and DEBUG:
                         st.write("**WhatsApp number for sync:**", whatsapp_number)
-                        st.write("**Sync attempt completed but returned False**")
+                        st.write("**Full sync result:**", result)
 
             except Exception as e:
                 st.error(f"❌ Error during sync: {e}")
@@ -2992,6 +3062,10 @@ def show_property_map():
                     "Área Terreno": prop.get("AREA TERRENO", "N/A"),
                     "Área Construção": prop.get("AREA CONSTRUCAO", "N/A"),
                     "Índice Cadastral": prop.get("INDICE CADASTRAL", "N/A"),
+                    "CPF Proprietário": prop.get("DOCUMENTO PROPRIETARIO", "N/A"),
+                    "Nome Proprietário": prop.get("NOME PROPRIETARIO PBH", "N/A"),
+                    "Idade": prop.get("IDADE", "N/A"),
+                    "Óbito Provável": prop.get("OBITO PROVAVEL", "N/A"),
                 }
             )
 
@@ -3008,5 +3082,13 @@ def show_property_map():
         f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}"
     )
 
+# ─── PROPERTY ASSIGNMENT POPUP ──────────────────────────────────────────────
+# Property assignment popup - rendered at the end after all main content
+try:
+    if st.session_state.get("show_property_assignment", False):
+        show_property_assignment_popup()
+except Exception as e:
+    st.error(f"Erro na funcionalidade de atribuição de propriedade: {e}")
+    st.session_state.show_property_assignment = False
 
 # Error handling removed for now - will be added back with proper try/except structure if needed

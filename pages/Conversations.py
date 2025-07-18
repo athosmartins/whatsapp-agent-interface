@@ -166,6 +166,7 @@ if "conversations_filter_state" not in st.session_state:
         "complemento_filter": [],
         "only_unarchived_filter": False,
         "only_unread_filter": False,
+        "property_status_filter": [],
     }
 
 # ─── ULTRA-FAST PROPERTY MAP FUNCTION ──────────────────────────────────────
@@ -880,14 +881,24 @@ try:
         def persistent_multiselect(
             label, options, filter_key, widget_key, help_text=None
         ):
-            current_selections = st.session_state.conversations_filter_state.get(
-                filter_key, []
-            )
+            # CRITICAL FIX: Use widget state as the single source of truth to prevent value disappearing bug
+            # Get current widget state if it exists, otherwise use persistent filter state
+            if widget_key in st.session_state:
+                # Widget state exists, use it as the source of truth
+                current_selections = st.session_state[widget_key]
+            else:
+                # Widget doesn't exist yet, use persistent filter state
+                current_selections = st.session_state.conversations_filter_state.get(
+                    filter_key, []
+                )
+            
+            # Combine available options with current selections to ensure they're always available
             all_options = list(set(options + current_selections))
             sorted_options = (
                 sorted(all_options, key=lambda x: x.lower()) if all_options else []
             )
 
+            # Create the widget with the current selections as default
             selected = st.multiselect(
                 label,
                 options=sorted_options,
@@ -895,6 +906,9 @@ try:
                 key=widget_key,
                 help=help_text,
             )
+            
+            # Update the persistent filter state with the widget's current value
+            # This ensures both states stay in sync
             st.session_state.conversations_filter_state[filter_key] = selected
             return selected
 
@@ -1044,9 +1058,19 @@ try:
 
         # === CONVERSA ===
         st.markdown("### 💬 Conversa")
-        col_conv1, col_conv2 = st.columns(2)
+        col_conv1, col_conv2, col_conv3 = st.columns(3)
 
         with col_conv1:
+            property_status_options = ["Sim", "Não"]
+            property_status_filter = persistent_multiselect(
+                "🏠 Propriedade Atribuída?",
+                property_status_options,
+                "property_status_filter",
+                "property_status_filter",
+                "Sim = Bairro e Endereço preenchidos, Não = Bairro ou Endereço em branco"
+            )
+
+        with col_conv2:
             only_unarchived = persistent_checkbox(
                 "📁 Apenas não arquivadas",
                 "only_unarchived_filter",
@@ -1054,7 +1078,7 @@ try:
                 "Mostrar apenas conversas não arquivadas",
             )
 
-        with col_conv2:
+        with col_conv3:
             only_unread = persistent_checkbox(
                 "👁️ Apenas não lidas",
                 "only_unread_filter",
@@ -1081,6 +1105,7 @@ try:
                     "complemento_filter": [],
                     "only_unarchived_filter": False,
                     "only_unread_filter": False,
+                    "property_status_filter": [],
                 }
                 # Also clear widget states
                 for key in [
@@ -1095,6 +1120,7 @@ try:
                     "complemento_filter",
                     "only_unarchived_filter",
                     "only_unread_filter",
+                    "property_status_filter",
                 ]:
                     if key in st.session_state:
                         del st.session_state[key]
@@ -1231,6 +1257,53 @@ try:
             filtered_df = filtered_df[filtered_df["unread_count"] > 0]
             if DEBUG:
                 st.sidebar.write(f"Unread filter: {before_count} → {len(filtered_df)}")
+        
+        # Apply property status filter
+        if property_status_filter and len(property_status_filter) > 0:
+            before_count = len(filtered_df)
+            
+            # Check if we need to filter by property completeness
+            if len(property_status_filter) == 1:  # Only one option selected
+                selected_option = property_status_filter[0]
+                
+                if selected_option == "Sim":
+                    # Show only conversations with both endereco_bairro and endereco filled
+                    if "endereco_bairro" in filtered_df.columns and "endereco" in filtered_df.columns:
+                        filtered_df = filtered_df[
+                            (filtered_df["endereco_bairro"].notna()) & 
+                            (filtered_df["endereco_bairro"] != "") & 
+                            (filtered_df["endereco"].notna()) & 
+                            (filtered_df["endereco"] != "")
+                        ]
+                        if DEBUG:
+                            st.sidebar.write(f"Property Status 'Sim' filter: {before_count} → {len(filtered_df)}")
+                    else:
+                        if DEBUG:
+                            st.sidebar.write(f"⚠️ Property Status 'Sim' filter SKIPPED - Missing columns: endereco_bairro={('endereco_bairro' in filtered_df.columns)}, endereco={('endereco' in filtered_df.columns)}")
+                        
+                elif selected_option == "Não":
+                    # Show only conversations with either endereco_bairro or endereco blank/empty OR BOTH blank/empty
+                    if "endereco_bairro" in filtered_df.columns and "endereco" in filtered_df.columns:
+                        filtered_df = filtered_df[
+                            (filtered_df["endereco_bairro"].isna()) | 
+                            (filtered_df["endereco_bairro"] == "") | 
+                            (filtered_df["endereco"].isna()) | 
+                            (filtered_df["endereco"] == "")
+                        ]
+                        if DEBUG:
+                            st.sidebar.write(f"Property Status 'Não' filter: {before_count} → {len(filtered_df)}")
+                    else:
+                        if DEBUG:
+                            st.sidebar.write(f"⚠️ Property Status 'Não' filter SKIPPED - Missing columns: endereco_bairro={('endereco_bairro' in filtered_df.columns)}, endereco={('endereco' in filtered_df.columns)}")
+            
+            # If both options are selected, show all conversations (no filtering)
+            # This is the default behavior when both or neither options are selected
+            if DEBUG:
+                st.sidebar.write(f"Property status filter applied: {property_status_filter}")
+                st.sidebar.write(f"Columns available: endereco_bairro={('endereco_bairro' in filtered_df.columns)}, endereco={('endereco' in filtered_df.columns)}")
+            
+            if DEBUG:
+                st.sidebar.write(f"Property assigned filter: {before_count} → {len(filtered_df)}")
 
     except Exception as e:
         st.error(f"Error applying filters: {e}")
