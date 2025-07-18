@@ -5,6 +5,7 @@ from datetime import datetime
 
 import pandas as pd
 import streamlit as st
+import requests
 
 # Conditional import to prevent crashes when auth not needed
 from config import (
@@ -44,6 +45,81 @@ from utils.sync_ui import (
     setup_auto_refresh,
 )
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CONVERSATION ARCHIVE FUNCTION
+# ──────────────────────────────────────────────────────────────────────────────
+
+def archive_conversation(phone_number: str, conversation_id: str) -> dict:
+    """Archive a conversation using the Voxuy webhook."""
+    try:
+        # Get chatId from secrets (same as conversation sync service)
+        chat_id = st.secrets.get("VOXUY_CHAT_ID", "07d49a4a-1b9c-4a02-847d-bad0fb3870eb")
+        
+        # Format phone number correctly
+        # Remove @s.whatsapp.net suffix if present
+        clean_phone = phone_number.split('@')[0] if '@' in phone_number else phone_number
+        
+        # Ensure phone has proper format (+55...)
+        if not clean_phone.startswith('+'):
+            # Add country code if not present
+            if clean_phone.startswith('55') and len(clean_phone) > 10:
+                clean_phone = '+' + clean_phone
+            else:
+                # Add Brazil country code
+                clean_phone = '+55' + clean_phone
+        
+        # Prepare webhook payload
+        payload = {
+            "phone": clean_phone,
+            "chatId": chat_id
+        }
+        
+        # Make HTTP request to archive webhook
+        webhook_url = "https://voxuy-archive-conversation.athosmartins.workers.dev/"
+        
+        response = requests.post(
+            webhook_url,
+            json=payload,
+            timeout=30,  # 30 second timeout
+            headers={"Content-Type": "application/json"}
+        )
+        
+        # Parse response
+        response_data = response.json() if response.content else {}
+        
+        if response.status_code == 200:
+            return {
+                "success": True,
+                "message": "Conversa arquivada com sucesso!",
+                "details": response_data
+            }
+        else:
+            return {
+                "success": False,
+                "message": f"Erro ao arquivar conversa (HTTP {response.status_code})",
+                "details": response_data,
+                "error": f"Status: {response.status_code}"
+            }
+            
+    except requests.exceptions.Timeout:
+        return {
+            "success": False,
+            "message": "Timeout ao tentar arquivar conversa",
+            "error": "Request timeout after 30 seconds"
+        }
+    except requests.exceptions.RequestException as e:
+        return {
+            "success": False,
+            "message": "Erro de conexão ao tentar arquivar conversa",
+            "error": str(e)
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": "Erro inesperado ao arquivar conversa",
+            "error": str(e)
+        }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PROPERTY ASSIGNMENT FUNCTIONS
@@ -1248,7 +1324,7 @@ def goto_next():
             st.query_params["conversation_id"] = conversation_id
 
 
-nav_prev_col, nav_property_col, nav_next_col = st.columns([1, 1, 1])
+nav_prev_col, nav_property_col, nav_archive_col, nav_next_col = st.columns([1, 1, 1, 1])
 with nav_prev_col:
     st.button(
         "⬅️ Anterior",
@@ -1265,6 +1341,34 @@ with nav_property_col:
     ):
         st.session_state.show_property_assignment = True
         st.rerun()
+with nav_archive_col:
+    if st.button(
+        "📁 Arquivar Conversa",
+        key="archive_conversation",
+        use_container_width=True,
+    ):
+        # Get phone number from current row
+        phone_number = row.get("phone_number") or row.get("whatsapp_number", "")
+        conversation_id = row.get("conversation_id", row.get("whatsapp_number", ""))
+        
+        if phone_number:
+            # Show loading state
+            with st.spinner("Arquivando conversa..."):
+                result = archive_conversation(phone_number, conversation_id)
+            
+            # Show result to user
+            if result["success"]:
+                st.success(result["message"])
+                # Optionally refresh the page or navigate to next conversation
+                st.rerun()
+            else:
+                st.error(f"{result['message']}")
+                if "error" in result and DEBUG:
+                    st.sidebar.error(f"Archive Debug: {result['error']}")
+                    if "details" in result:
+                        st.sidebar.json(result["details"])
+        else:
+            st.error("Número de telefone não encontrado para esta conversa.")
 with nav_next_col:
     st.button(
         "Próximo ➡️",
