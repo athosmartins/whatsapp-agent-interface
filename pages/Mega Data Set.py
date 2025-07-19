@@ -738,17 +738,11 @@ try:
                 st.session_state.mega_data_filter_state["bairro_filter"] = selected_bairros
                 
                 estimated_reduction = (len(selected_bairros) / len(available_bairros)) * 100
-                st.metric(
-                    "📊 Dados a carregar",
-                    f"{estimated_reduction:.1f}% do total",
-                    f"{100 - estimated_reduction:.1f}% de redução"
-                )
+
                 
                 # Auto-load data when bairros are selected (no manual button needed)
                 load_data_btn = True
-                st.info("🚀 Carregando dados automaticamente...")
             else:
-                st.info("👆 Selecione pelo menos um bairro para continuar")
                 load_data_btn = False
     else:
         st.error("❌ Não foi possível carregar a lista de bairros")

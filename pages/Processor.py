@@ -154,7 +154,7 @@ def archive_conversation(phone_number: str, conversation_id: str) -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def show_property_assignment_popup():
-    """Show the property assignment popup with cascading filters."""
+    """Show the property assignment popup with memory-safe loading."""
     # Safety check - only show if we have a valid conversation loaded
     if not hasattr(st.session_state, 'current_conversation_id') or not st.session_state.current_conversation_id:
         st.error("Por favor, carregue uma conversa primeiro.")
@@ -162,26 +162,25 @@ def show_property_assignment_popup():
         st.rerun()
         return
     
-    from services.mega_data_set_loader import load_mega_data_set, get_available_bairros
+    from services.unified_property_loader import property_loader, MemoryMonitor
     
     # Create a modal-like container
     with st.container():
         st.markdown("### 🏢 Atribuir Propriedade")
         st.markdown("---")
         
-        # Load mega data set
-        try:
-            mega_df = load_mega_data_set()
-            if mega_df is None or mega_df.empty:
-                st.error("Erro ao carregar o mega data set.")
-                return
-        except Exception as e:
-            st.error(f"Erro ao carregar o mega data set: {e}")
+        # Display memory usage for monitoring
+        MemoryMonitor.display_memory_widget()
+        
+        # Memory safety check before proceeding
+        if not MemoryMonitor.check_memory_safety("property assignment"):
+            st.error("Cannot open property assignment - memory usage too high")
+            st.session_state.show_property_assignment = False
             return
         
-        # Get available bairros
+        # Get available bairros using memory-safe approach
         try:
-            bairros = get_available_bairros()
+            bairros = property_loader.get_available_bairros()
             if not bairros:
                 st.warning("Nenhum bairro encontrado no mega data set. Usando fallback.")
                 bairros = ["Centro", "Savassi", "Funcionários", "Lourdes", "Buritis", "Pampulha", "Belvedere"]
@@ -210,20 +209,29 @@ def show_property_assignment_popup():
                 # Force rerun to update the interface
                 st.rerun()
         
-        # Apply bairro filter
-        filtered_df = mega_df.copy()
-        if selected_bairros:
-            filtered_df = filtered_df[filtered_df["BAIRRO"].isin(selected_bairros)]
+        # Load data for selected bairros only (memory-safe approach)
+        if not selected_bairros:
+            st.info("Selecione pelo menos um bairro para carregar as propriedades.")
+            st.markdown("💡 **Dica**: Esta abordagem carrega apenas as propriedades dos bairros selecionados para otimizar o uso de memória.")
+            filtered_df = pd.DataFrame()  # Empty dataframe when no bairros selected
+        else:
+            with st.spinner(f"Carregando propriedades para {len(selected_bairros)} bairro(s)..."):
+                filtered_df = property_loader.load_bairros_safe(selected_bairros)
             
-            # Auto-add Nome Logradouro filter when bairro is selected
-            if len(st.session_state.property_assignment_state.get("dynamic_filters", [])) == 0:
-                nome_logradouro_filter = {
-                    "column": "NOME LOGRADOURO",
-                    "operator": "is_one_of",
-                    "value": [],
-                    "enabled": True
-                }
-                st.session_state.property_assignment_state["dynamic_filters"] = [nome_logradouro_filter]
+            if filtered_df.empty:
+                st.warning(f"Nenhuma propriedade encontrada para os bairros selecionados: {', '.join(selected_bairros)}")
+            else:
+                st.success(f"✅ Carregadas {len(filtered_df):,} propriedades de {len(selected_bairros)} bairro(s)")
+                
+                # Auto-add Nome Logradouro filter when bairro is selected
+                if len(st.session_state.property_assignment_state.get("dynamic_filters", [])) == 0:
+                    nome_logradouro_filter = {
+                        "column": "NOME LOGRADOURO",
+                        "operator": "is_one_of",
+                        "value": [],
+                        "enabled": True
+                    }
+                    st.session_state.property_assignment_state["dynamic_filters"] = [nome_logradouro_filter]
         
         # Dynamic filters
         render_property_dynamic_filters(filtered_df)
@@ -1612,45 +1620,61 @@ with left_col:
                             debug_info["cpf_found"] = cpf
                             break
 
-                # Step 3: Debug mega_data_set lookup
+                # Step 3: Debug mega_data_set lookup (memory-safe)
                 if debug_info["cpf_found"]:
                     from services.mega_data_set_loader import (
                         find_properties_by_documento,
-                        load_mega_data_set,
                     )
+                    from services.unified_property_loader import property_loader, MemoryMonitor
 
-                    # Load mega_data_set to show what's available
-                    mega_df = load_mega_data_set()
-                    debug_info["mega_data_total_rows"] = len(mega_df)
-                    debug_info["mega_data_columns"] = list(mega_df.columns)
+                    # Check memory before proceeding with debug
+                    if MemoryMonitor.check_memory_safety("debug property lookup"):
+                        # Use a sample of bairros for debug instead of full dataset
+                        sample_bairros = property_loader.get_available_bairros()[:3]  # Just first 3 bairros
+                        if sample_bairros:
+                            debug_df = property_loader.load_bairros_safe(sample_bairros)
+                            debug_info["mega_data_sample_rows"] = len(debug_df)
+                            debug_info["mega_data_columns"] = list(debug_df.columns) if not debug_df.empty else []
+                            debug_info["debug_note"] = f"Sample from {len(sample_bairros)} bairros for memory safety"
+                        else:
+                            debug_info["mega_data_sample_rows"] = 0
+                            debug_info["mega_data_columns"] = []
+                            debug_info["debug_note"] = "No bairros available for debug"
+                    else:
+                        debug_info["mega_data_sample_rows"] = 0
+                        debug_info["mega_data_columns"] = []
+                        debug_info["debug_note"] = "Skipped debug due to memory constraints"
 
-                    # Find document column
+                    # Find document column using sample data
                     doc_col = None
-                    for col in mega_df.columns:
-                        if col == "DOCUMENTO PROPRIETARIO":
-                            doc_col = col
-                            break
+                    if 'debug_df' in locals() and not debug_df.empty:
+                        for col in debug_df.columns:
+                            if col == "DOCUMENTO PROPRIETARIO":
+                                doc_col = col
+                                break
 
                     debug_info["mega_data_document_column"] = doc_col
 
-                    if doc_col:
+                    if doc_col and 'debug_df' in locals() and not debug_df.empty:
                         # Show CPF cleaning
                         from services.mega_data_set_loader import clean_document_number
 
                         clean_cpf = clean_document_number(debug_info["cpf_found"])
                         debug_info["clean_cpf"] = clean_cpf
 
-                        # Check for matches
+                        # Check for matches in sample data only (memory-safe)
                         debug_info["mega_data_matches"] = []
                         checked_count = 0
-                        for idx, mega_row in mega_df.iterrows():
+                        # Limit to first 10 rows of sample for debug
+                        sample_rows = debug_df.head(10)
+                        for idx, mega_row in sample_rows.iterrows():
                             row_cpf = clean_document_number(str(mega_row[doc_col]))
                             checked_count += 1
 
                             # Show first few comparisons
                             if checked_count <= 5:
                                 debug_info["errors"].append(
-                                    f"Row {idx}: '{mega_row[doc_col]}' -> '{row_cpf}' vs '{clean_cpf}'"
+                                    f"Sample Row {idx}: '{mega_row[doc_col]}' -> '{row_cpf}' vs '{clean_cpf}'"
                                 )
 
                             if row_cpf == clean_cpf:
