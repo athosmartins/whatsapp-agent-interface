@@ -29,8 +29,13 @@ def get_hex_api_token():
     # 2. Streamlit secrets (for Streamlit Cloud)
     try:
         import streamlit as st
-        if hasattr(st, 'secrets') and 'HEX_API_SECRET' in st.secrets:
-            return st.secrets['HEX_API_SECRET']
+        if hasattr(st, 'secrets'):
+            # Try direct access first
+            if 'HEX_API_SECRET' in st.secrets:
+                return st.secrets['HEX_API_SECRET']
+            # Try accessing from [hex] section
+            if 'hex' in st.secrets and 'HEX_API_SECRET' in st.secrets['hex']:
+                return st.secrets['hex']['HEX_API_SECRET']
     except:
         pass
     
