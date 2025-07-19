@@ -582,14 +582,25 @@ def sync_record_to_sheet(record_data: Dict[str, Any], whatsapp_number: str, shee
         print(f"Updated {len(updated_fields)} fields for WhatsApp {whatsapp_number}: {updated_fields}")
         
         # Return detailed results
-        return {
-            "success": len(updated_fields) > 0,
-            "action": "updated",
-            "row_number": target_row,
-            "updated_fields": updated_fields,
-            "field_mappings": {field: record_data[field] for field in updated_fields},
-            "message": f"Updated {len(updated_fields)} fields in row {target_row}"
-        }
+        if len(updated_fields) > 0:
+            return {
+                "success": True,
+                "action": "updated",
+                "row_number": target_row,
+                "updated_fields": updated_fields,
+                "field_mappings": {field: record_data[field] for field in updated_fields},
+                "message": f"Updated {len(updated_fields)} fields in row {target_row}"
+            }
+        else:
+            # No fields were updated - values are already identical
+            return {
+                "success": True,
+                "action": "already_synced",
+                "row_number": target_row,
+                "updated_fields": [],
+                "field_mappings": {},
+                "message": f"Spreadsheet already has identical values (row {target_row})"
+            }
         
     except Exception as e:
         print(f"Error syncing record to sheet: {e}")

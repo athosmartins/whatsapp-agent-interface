@@ -47,6 +47,34 @@ from utils.sync_ui import (
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# PHONE NUMBER FORMATTING FUNCTION
+# ──────────────────────────────────────────────────────────────────────────────
+
+def format_phone_for_display(phone_number: str) -> str:
+    """Format phone number to (XX) XXXXX-XXXX format for display."""
+    if not phone_number:
+        return ""
+    
+    # Remove any non-digit characters and @domain suffix
+    clean_phone = phone_number.split('@')[0] if '@' in phone_number else phone_number
+    clean_phone = ''.join(filter(str.isdigit, clean_phone))
+    
+    # Remove country code if present (assuming Brazilian numbers)
+    if clean_phone.startswith('55') and len(clean_phone) > 10:
+        clean_phone = clean_phone[2:]
+    
+    # Format as (XX) XXXXX-XXXX if we have at least 10 digits
+    if len(clean_phone) >= 10:
+        area_code = clean_phone[:2]
+        if len(clean_phone) == 11:  # Mobile number
+            number_part = clean_phone[2:7] + '-' + clean_phone[7:]
+        else:  # Landline number (10 digits)
+            number_part = clean_phone[2:6] + '-' + clean_phone[6:]
+        return f"({area_code}) {number_part}"
+    
+    return phone_number  # Return original if can't format
+
+# ──────────────────────────────────────────────────────────────────────────────
 # CONVERSATION ARCHIVE FUNCTION
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -171,6 +199,16 @@ def show_property_assignment_popup():
                 key="property_bairro_filter"
             )
             st.session_state.property_assignment_state["bairro_filter"] = selected_bairros
+        
+        with col2:
+            if st.button("🗑️ Limpar Filtros", help="Limpar todos os filtros aplicados", use_container_width=True):
+                # Clear all filter-related session state
+                st.session_state.property_assignment_state = {
+                    "bairro_filter": [],
+                    "dynamic_filters": []
+                }
+                # Force rerun to update the interface
+                st.rerun()
         
         # Apply bairro filter
         filtered_df = mega_df.copy()
@@ -596,8 +634,12 @@ if "property_assignment_state" not in st.session_state:
 # ─── FLAGS ──────────────────────────────────────────────────────────────────
 DEV = True  # Set based on your environment
 
-# Debug mode check
-DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
+# Initialize DEBUG mode
+DEBUG = False
+if DEV:
+    DEBUG = st.sidebar.checkbox("🐛 Debug Mode", value=False)
+    # Also store in session state for cross-module access
+    st.session_state.debug_mode = DEBUG
 
 # Display preloader status in sidebar
 display_preloader_status()
@@ -628,8 +670,8 @@ if LOGIN_ENABLED:
         st.info("Login disabled due to configuration error")
         LOGIN_ENABLED = False
 else:
-    # When login is disabled, show a warning in DEV mode
-    if DEV:
+    # When login is disabled, show a warning in DEBUG mode
+    if DEBUG:
         st.warning("🔓 Login is disabled (DEV mode)")
 
 # ─── AUTHENTICATED APP STARTS HERE ──────────────────────────────────────
@@ -645,7 +687,8 @@ try:
     query_params = st.query_params
     if "conversation_id" in query_params:
         auto_load_conversation = query_params["conversation_id"]
-        st.info(f"🔗 Auto-loading conversation: {auto_load_conversation}")
+        if DEBUG:
+            st.info(f"🔗 Auto-loading conversation: {auto_load_conversation}")
 except:
     pass
 
@@ -760,54 +803,51 @@ def format_date_header(timestamp):
 # ─── DEBUG PANEL (dev‐only) ─────────────────────────────────────────────────
 debug_panel = None
 logged_messages = set()
-DEBUG = False
 
-if DEV:
-    DEBUG = st.sidebar.checkbox("🐛 Debug Mode", value=False)
-    if DEBUG:
-        debug_panel = st.sidebar.expander("🔍 Debug Log", expanded=False)
+if DEV and DEBUG:
+    debug_panel = st.sidebar.expander("🔍 Debug Log", expanded=False)
 
-        # Add database info to debug panel
-        db_info_panel = st.sidebar.expander("📊 Database Info", expanded=True)
-        if db_info_panel:
-            db_info = get_db_info()
-            db_info_panel.write("**Database File Information:**")
+    # Add database info to debug panel
+    db_info_panel = st.sidebar.expander("📊 Database Info", expanded=True)
+    if db_info_panel:
+        db_info = get_db_info()
+        db_info_panel.write("**Database File Information:**")
+        db_info_panel.write(
+            f"📁 **Original filename:** {db_info['original_filename']}"
+        )
+        db_info_panel.write(
+            f"🕒 **Original modified:** {db_info['original_modified']}"
+        )
+        db_info_panel.write(f"💾 **Local path:** {db_info['local_path']}")
+        db_info_panel.write(f"📅 **Local modified:** {db_info['local_modified']}")
+        db_info_panel.write(f"⏰ **File age:** {db_info['file_age']}")
+        db_info_panel.write(f"📏 **File size:** {db_info['local_size']:,} bytes")
+
+        # Show freshness status
+        if db_info.get("is_stale", False):
+            db_info_panel.warning(
+                "⚠️ Database file is older than 1 hour. Will auto-refresh on next load."
+            )
+        else:
+            db_info_panel.success("✅ Database file is fresh (< 1 hour old)")
+
+        db_info_panel.info(
+            "🔄 Database automatically refreshes when older than 1 hour"
+        )
+
+        # Add DataFrame info
+        if "master_df" in st.session_state:
+            db_info_panel.write("**DataFrame Info:**")
             db_info_panel.write(
-                f"📁 **Original filename:** {db_info['original_filename']}"
+                f"📊 **Total records:** {len(st.session_state.master_df)}"
             )
             db_info_panel.write(
-                f"🕒 **Original modified:** {db_info['original_modified']}"
+                f"📝 **Available columns:** {list(st.session_state.master_df.columns)}"
             )
-            db_info_panel.write(f"💾 **Local path:** {db_info['local_path']}")
-            db_info_panel.write(f"📅 **Local modified:** {db_info['local_modified']}")
-            db_info_panel.write(f"⏰ **File age:** {db_info['file_age']}")
-            db_info_panel.write(f"📏 **File size:** {db_info['local_size']:,} bytes")
-
-            # Show freshness status
-            if db_info.get("is_stale", False):
-                db_info_panel.warning(
-                    "⚠️ Database file is older than 1 hour. Will auto-refresh on next load."
-                )
-            else:
-                db_info_panel.success("✅ Database file is fresh (< 1 hour old)")
-
-            db_info_panel.info(
-                "🔄 Database automatically refreshes when older than 1 hour"
-            )
-
-            # Add DataFrame info
-            if "master_df" in st.session_state:
-                db_info_panel.write("**DataFrame Info:**")
+            if "original_values" in st.session_state:
                 db_info_panel.write(
-                    f"📊 **Total records:** {len(st.session_state.master_df)}"
+                    f"✏️ **Modified records:** {len(st.session_state.original_values)}"
                 )
-                db_info_panel.write(
-                    f"📝 **Available columns:** {list(st.session_state.master_df.columns)}"
-                )
-                if "original_values" in st.session_state:
-                    db_info_panel.write(
-                        f"✏️ **Modified records:** {len(st.session_state.original_values)}"
-                    )
 
 
 def dbg(message: str):
@@ -1201,28 +1241,30 @@ if auto_load_conversation:
             # Found the conversation, set idx to its position
             conversation_idx = matching_conversations.index[0]
             st.session_state.idx = conversation_idx
-            st.success(f"✅ Successfully loaded conversation: {auto_load_conversation}")
+            if DEBUG:
+                st.success(f"✅ Successfully loaded conversation: {auto_load_conversation}")
         else:
-            st.warning(
-                f"⚠️ Conversation {auto_load_conversation} not found in current dataset"
-            )
-            
-            # Show debug info for missing conversation
-            with st.expander("🔍 Debug: Why conversation not found?", expanded=False):
-                st.write(f"**Looking for:** {auto_load_conversation}")
-                st.write(f"**DataFrame shape:** {df.shape}")
-                st.write(f"**Available columns:** {list(df.columns)}")
+            if DEBUG:
+                st.warning(
+                    f"⚠️ Conversation {auto_load_conversation} not found in current dataset"
+                )
                 
-                if 'whatsapp_number' in df.columns:
-                    unique_numbers = df['whatsapp_number'].unique()
-                    st.write(f"**Total unique phone numbers:** {len(unique_numbers)}")
-                    st.write(f"**Sample phone numbers:** {unique_numbers[:10].tolist()}")
+                # Show debug info for missing conversation
+                with st.expander("🔍 Debug: Why conversation not found?", expanded=False):
+                    st.write(f"**Looking for:** {auto_load_conversation}")
+                    st.write(f"**DataFrame shape:** {df.shape}")
+                    st.write(f"**Available columns:** {list(df.columns)}")
                     
-                    # Check if it's a partial match issue
-                    partial_matches = df[df['whatsapp_number'].str.contains(auto_load_conversation[-8:], na=False)]
-                    if not partial_matches.empty:
-                        st.write(f"**Partial matches found:** {len(partial_matches)}")
-                        st.write(f"**Partial matches:** {partial_matches['whatsapp_number'].tolist()}")
+                    if 'whatsapp_number' in df.columns:
+                        unique_numbers = df['whatsapp_number'].unique()
+                        st.write(f"**Total unique phone numbers:** {len(unique_numbers)}")
+                        st.write(f"**Sample phone numbers:** {unique_numbers[:10].tolist()}")
+                        
+                        # Check if it's a partial match issue
+                        partial_matches = df[df['whatsapp_number'].str.contains(auto_load_conversation[-8:], na=False)]
+                        if not partial_matches.empty:
+                            st.write(f"**Partial matches found:** {len(partial_matches)}")
+                            st.write(f"**Partial matches:** {partial_matches['whatsapp_number'].tolist()}")
                         
     except Exception as e:
         st.error(f"🚨 **Error loading conversation {auto_load_conversation}**")
@@ -1453,6 +1495,10 @@ with left_col:
     alive_status = (
         "✝︎ Provável Óbito" if row.get("OBITO_PROVAVEL", False) else "🌟 Provável vivo"
     )
+    
+    # Format phone number for display
+    raw_phone = row.get("phone_number") or row.get("whatsapp_number", "")
+    formatted_phone = format_phone_for_display(raw_phone)
 
     # Build familiares HTML
     familiares_html = ""
@@ -1475,7 +1521,8 @@ with left_col:
             <div style="flex: 1;">
                 <div style="margin-bottom: 10px;">
                     <strong>Nome no WhatsApp:</strong> {display_name}<br>
-                    <strong>Nome Esperado:</strong> {expected_name}
+                    <strong>Nome Esperado:</strong> {expected_name}<br>
+                    <strong>Celular:</strong> {formatted_phone}
                 </div>
                 <div style="margin-bottom: 10px;">
                     {age_text}<br>
@@ -1651,8 +1698,8 @@ with left_col:
 
     if phone_number:
         try:
-            # Enhanced debug for production crash debugging
-            if DEBUG or True:  # Always enable for production debugging
+            # Debug information for property loading
+            if DEBUG:
                 st.write(f"🔍 **Debug - Property Loading:**")
                 st.write(f"- **Phone number:** {phone_number}")
                 st.write(f"- **Phone type:** {type(phone_number)}")
@@ -1664,7 +1711,7 @@ with left_col:
 
             properties_from_mega = get_properties_for_phone(phone_number)
             
-            if DEBUG or True:  # Always enable for production debugging
+            if DEBUG:
                 st.write(f"✅ **Properties loaded:** {len(properties_from_mega)} found")
             
             # Format properties for display
@@ -1974,8 +2021,7 @@ with right_col:
         
         # Conversation header with sync status
         col1, col2 = st.columns([3, 1])
-        with col1:
-            st.subheader("💬 Histórico da Conversa")
+
         with col2:
             # Show sync status if available
             if conversation_id:
@@ -1996,8 +2042,8 @@ with right_col:
         # Check if conversation data was cleared by sync (force reload)
         force_reload = 'conversation_data' not in st.session_state
         
-        # Enhanced debug for production crash debugging
-        if DEBUG or True:  # Always enable for production debugging
+        # Debug information for conversation loading
+        if DEBUG:
             st.write(f"🔍 **Debug - Conversation Loading:**")
             st.write(f"- **Phone:** {row.get('whatsapp_number', 'N/A')}")
             st.write(f"- **Conversation ID:** {conversation_id}")
@@ -2006,12 +2052,12 @@ with right_col:
         
         if "conversation_id" in row.index and pd.notna(conversation_id):
             try:
-                if DEBUG or True:  # Always enable for production debugging
+                if DEBUG:
                     st.write(f"⏳ Attempting to load messages for conversation: {conversation_id}")
                 
                 messages_df = get_conversation_messages(conversation_id)
                 
-                if DEBUG or True:  # Always enable for production debugging
+                if DEBUG:
                     st.write(f"✅ Messages loaded successfully. Shape: {messages_df.shape if not messages_df.empty else 'Empty DataFrame'}")
                 
                 if not messages_df.empty:
@@ -2735,7 +2781,8 @@ with right_col:
         if modified_fields:
             st.info(f"📝 Campos modificados: {', '.join(modified_fields)}")
         else:
-            st.success("✅ Sem modificações")
+            if DEBUG:
+                st.success("✅ Sem modificações")
 
         # Debug info (remove this later)
         if DEV and DEBUG:
@@ -2918,6 +2965,8 @@ with sync_col:
                         st.success(f"✅ New row created in Google Sheet! (Row #{row_number})")
                     elif action == "updated":
                         st.success(f"✅ Record updated in Google Sheet! (Row #{row_number})")
+                    elif action == "already_synced":
+                        st.info(f"ℹ️ Spreadsheet already has identical values (Row #{row_number})")
                     
                     # Mark as synced in the dataframe
                     st.session_state.master_df.at[idx, "sheet_synced"] = True

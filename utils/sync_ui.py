@@ -67,7 +67,12 @@ def setup_conversation_sync(conversation_id: str):
             # Start new sync
             if start_auto_sync(conversation_id):
                 st.session_state.current_sync_conversation = conversation_id
-                if st.session_state.sync_notifications:
+                # Check for debug mode - try multiple methods
+                debug_mode = (
+                    globals().get('DEBUG', False) or 
+                    getattr(st.session_state, 'debug_mode', False)
+                )
+                if st.session_state.sync_notifications and debug_mode:
                     st.success("🔄 Auto-sync started for this conversation")
                 if debug_mode:
                     st.write(f"✅ Auto-sync started successfully for {conversation_id}")
@@ -162,35 +167,43 @@ def render_sync_status(conversation_id: str):
 def render_sync_header(conversation_id: str):
     """Render sync status in the main header."""
     col1, col2, col3 = st.columns([6, 2, 2])
-    
-    with col1:
-        st.title("💬 Conversation Processor")
+
     
     with col2:
-        # Live countdown
-        if st.session_state.auto_sync_enabled:
-            status = get_sync_status(conversation_id)
-            next_sync_in = status.get("next_sync_in", 0)
-            if next_sync_in > 0:
-                st.metric("Next sync", f"{int(next_sync_in)}s")
+        # Live countdown - only show in debug mode
+        debug_mode = (
+            globals().get('DEBUG', False) or 
+            getattr(st.session_state, 'debug_mode', False)
+        )
+        if debug_mode:
+            if st.session_state.auto_sync_enabled:
+                status = get_sync_status(conversation_id)
+                next_sync_in = status.get("next_sync_in", 0)
+                if next_sync_in > 0:
+                    st.metric("Next sync", f"{int(next_sync_in)}s")
+                else:
+                    st.metric("Auto-sync", "Active")
             else:
-                st.metric("Auto-sync", "Active")
-        else:
-            st.metric("Auto-sync", "Off")
+                st.metric("Auto-sync", "Off")
     
     with col3:
-        # Quick status badge
-        status = get_sync_status(conversation_id)
-        status_text = status.get("status", "Inactive")
-        
-        if status_text.startswith("✅"):
-            st.success("Synced")
-        elif status_text.startswith("❌"):
-            st.error("Error")
-        elif status.get("active", False):
-            st.info("Active")
-        else:
-            st.warning("Inactive")
+        # Quick status badge - only show in debug mode
+        debug_mode = (
+            globals().get('DEBUG', False) or 
+            getattr(st.session_state, 'debug_mode', False)
+        )
+        if debug_mode:
+            status = get_sync_status(conversation_id)
+            status_text = status.get("status", "Inactive")
+            
+            if status_text.startswith("✅"):
+                st.success("Synced")
+            elif status_text.startswith("❌"):
+                st.error("Error")
+            elif status.get("active", False):
+                st.info("Active")
+            else:
+                st.warning("Inactive")
 
 def check_for_sync_updates(conversation_id: str) -> bool:
     """Check for sync updates and handle them. Returns True if UI should refresh."""
@@ -296,11 +309,17 @@ def render_sync_metrics_card():
         col1, col2, col3 = st.columns(3)
         
         with col1:
-            st.metric(
-                "Status",
-                "Active" if status.get("active") else "Inactive",
-                delta="🔄" if status.get("active") else "⏸️"
+            # Check for debug mode - try multiple methods
+            debug_mode = (
+                globals().get('DEBUG', False) or 
+                getattr(st.session_state, 'debug_mode', False)
             )
+            if debug_mode:
+                st.metric(
+                    "Status",
+                    "Active" if status.get("active") else "Inactive",
+                    delta="🔄" if status.get("active") else "⏸️"
+                )
         
         with col2:
             total_syncs = status.get("total_syncs", 0)
