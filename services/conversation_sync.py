@@ -224,6 +224,23 @@ class ConversationSyncManager:
                 print(f"Response Headers: {dict(response.headers)}")
                 print(f"Response Text (first 200 chars): {response.text[:200]}")
 
+                if response.status_code == 401:
+                    # TEMPORARY FIX: Authentication cookies expired
+                    print("⚠️ **TEMPORARY FIX**: Voxuy API authentication cookies expired")
+                    print("   Skipping API sync to prevent blocking conversation loading")
+                    return {
+                        "success": True,  # Return success to not block UI
+                        "error": "Authentication cookies expired - skipping sync",
+                        "messages_added": 0,
+                        "total_fetched": 0,
+                        "status": "⚠️ Auth expired - sync skipped",
+                        "debug_info": {
+                            **debug_info,
+                            "response_status": response.status_code,
+                            "auth_note": "Cookies expired - requires manual renewal",
+                        },
+                    }
+
                 if response.status_code != 200:
                     return {
                         "success": False,

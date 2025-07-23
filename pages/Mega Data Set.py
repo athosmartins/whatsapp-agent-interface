@@ -1159,4 +1159,37 @@ with col1:
             st.info(f"📋 Total de {len(display_columns)} colunas disponíveis")
         else:
             st.warning("⚠️ Nenhuma coluna encontrada para exibição")
+
+# ─── BACKGROUND OPERATIONS SIDEBAR ─────────────────────────────────────────
+# Sync global background operations to session state for UI updates
+try:
+    from services.background_operations import global_storage, get_running_operations, render_operations_sidebar
+    
+    global_storage.sync_to_session_state()
+    
+    # Auto-refresh with rate limiting if there are running operations
+    running_ops = get_running_operations()
+    if running_ops:
+        # Rate-limited refresh: only refresh every few seconds when operations are running
+        current_time = time.time()
+        last_refresh_key = "last_bg_ops_refresh_megadata"
+        
+        if last_refresh_key not in st.session_state:
+            st.session_state[last_refresh_key] = 0
+        
+        # Refresh every 3 seconds when operations are running
+        if current_time - st.session_state[last_refresh_key] > 3.0:
+            st.session_state[last_refresh_key] = current_time
+            st.rerun()
+        
+except Exception as e:
+    if DEBUG:
+        st.sidebar.error(f"Error syncing background operations: {e}")
+
+# Render background operations status in sidebar
+try:
+    render_operations_sidebar()
+except Exception as e:
+    st.sidebar.error(f"Error displaying operations status: {e}")
+
     st.stop()

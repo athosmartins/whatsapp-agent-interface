@@ -6,6 +6,13 @@ import streamlit as st
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
+# Import centralized phone utilities
+from services.phone_utils import (
+    clean_phone_for_matching,
+    format_phone_for_storage as format_phone_for_storage_new,
+    generate_phone_variants
+)
+
 # Google Sheets configuration
 SPREADSHEET_ID = "1vJItZ03PiZ4Y3HSwBnK_AUCOiQK32OkynMCd-1exU9k"
 CREDENTIALS_FILE = "credentials.json"
@@ -104,73 +111,16 @@ def format_address_field(address):
 
 def format_phone_for_storage(phone):
     """Format phone number for storage in spreadsheet as '+55 + area + 9 + 8 digits."""
-    if not phone:
-        return ""
-    
-    # Clean the phone number
-    import re
-    clean = re.sub(r'[^0-9]', '', str(phone))
-    
-    # Remove country code if present
-    if clean.startswith('55') and len(clean) > 10:
-        clean = clean[2:]
-    
-    # Brazilian area codes
-    valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
-    
-    # Validate and format
-    if len(clean) == 10 and clean[:2] in valid_area_codes:
-        # 10 digits: add mobile prefix if missing
-        area_code = clean[:2]
-        number = clean[2:]
-        if number[0] in '6789':
-            clean = area_code + '9' + number
-    elif len(clean) == 11 and clean[:2] in valid_area_codes:
-        # 11 digits: already has mobile prefix
-        pass
-    else:
-        # Invalid format, return as is
-        return phone
-    
-    # Format as '+55 + area + 9 + 8 digits (apostrophe prevents Google Sheets formula interpretation)
-    if len(clean) == 11:
-        formatted = f"'+55{clean}"
+    # Use centralized phone utility
+    formatted = format_phone_for_storage_new(phone)
+    if formatted and formatted != phone:
         print(f"📱 Phone formatted: {phone} → {formatted}")
-        return formatted
-    else:
-        print(f"📱 Phone format invalid, returning as-is: {phone} (cleaned: {clean})")
-        return phone
+    return formatted
 
 def clean_phone_for_match(phone):
     """Clean phone numbers for matching - Enhanced algorithm."""
-    if not phone:
-        return ""
-    
-    # Clean whitespace and special characters
-    import re
-    clean = re.sub(r'[\s\t\n\r]', '', str(phone))
-    clean = re.sub(r'[^0-9]', '', clean)
-    
-    # Handle edge cases where phone might be too short
-    if len(clean) < 8:
-        return ""
-    
-    # Remove country code if present (55 for Brazil)
-    if clean.startswith('55') and len(clean) > 10:
-        clean = clean[2:]
-    
-    # Brazilian area codes
-    valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
-    
-    # If 10 digits and starts with valid area code, add mobile prefix
-    if len(clean) == 10 and clean[:2] in valid_area_codes:
-        area_code = clean[:2]
-        number = clean[2:]
-        # If it's a mobile number (starts with 6, 7, 8, or 9) and doesn't have 9 prefix
-        if number[0] in '6789' and not number.startswith('9'):
-            clean = area_code + '9' + number
-    
-    return clean
+    # Use centralized phone utility for consistent behavior
+    return clean_phone_for_matching(phone)
 
 @st.cache_data(ttl=1800)  # Cache for 30 minutes
 def find_phone_match(target_phone, sheet_data):
@@ -189,35 +139,14 @@ def find_phone_match(target_phone, sheet_data):
     if whatsapp_col_index is None:
         return None
     
-    clean_target = clean_phone_for_match(target_phone)
-    
-    # Brazilian area codes
-    valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
-    
-    # Create variants to try
-    variants = [clean_target]
-    
-    # If target is 10 digits with area code, try adding mobile prefix
-    if len(clean_target) == 10 and clean_target[:2] in valid_area_codes:
-        area_code = clean_target[:2]
-        number = clean_target[2:]
-        # Add mobile prefix for numbers that start with 6, 7, 8, or 9
-        if number[0] in '6789':
-            variants.append(area_code + '9' + number)
-    
-    # If target has mobile prefix, also try without it
-    if len(clean_target) == 11 and clean_target[:2] in valid_area_codes:
-        area_code = clean_target[:2]
-        mobile_prefix = clean_target[2]
-        number = clean_target[3:]
-        if mobile_prefix == '9' and number[0] in '6789':
-            variants.append(area_code + number)
+    # Use centralized phone utilities to generate variants
+    variants = generate_phone_variants(target_phone)
     
     # Try to find a match with any variant
     for variant in variants:
         for i, row in enumerate(sheet_data[1:], start=1):
             if whatsapp_col_index < len(row):
-                sheet_phone = clean_phone_for_match(row[whatsapp_col_index])
+                sheet_phone = clean_phone_for_matching(row[whatsapp_col_index])
                 if sheet_phone and sheet_phone == variant:
                     return (row, i)
     
@@ -422,8 +351,17 @@ def update_sheet(changes: List[Dict[str, Any]]) -> List[int]:
     
     return successful_updates
 
-def sync_record_to_sheet(record_data: Dict[str, Any], whatsapp_number: str, sheet_name: str = "Sheet1") -> Dict[str, Any]:
-    """Sync a complete record to Google Sheet by finding the row with matching WhatsApp number or creating new row."""
+def sync_record_to_sheet(record_data: Dict[str, Any], whatsapp_number: str, sheet_name: str = "Sheet1", essential_fields: Dict[str, Any] = None, partial_update: bool = True) -> Dict[str, Any]:
+    """
+    Sync record to Google Sheet with support for partial updates.
+    
+    Args:
+        record_data: Fields to update in the spreadsheet
+        whatsapp_number: Phone number to identify the row
+        sheet_name: Name of the sheet to update
+        essential_fields: Required fields for new row creation (cpf, Nome, etc.)
+        partial_update: If True, only update specified fields; if False, update entire row
+    """
     service = get_sheets_service()
     if not service:
         return {"success": False, "error": "Google Sheets service not available", "action": "failed"}
@@ -456,70 +394,16 @@ def sync_record_to_sheet(record_data: Dict[str, Any], whatsapp_number: str, shee
             print("WhatsApp column not found in sheet")
             return {"success": False, "error": "WhatsApp column not found in sheet", "action": "failed"}
         
-        # Clean phone numbers for matching - Enhanced algorithm
-        def clean_phone_for_match(phone):
-            if not phone:
-                return ""
-            
-            # Clean whitespace and special characters
-            import re
-            clean = re.sub(r'[\s\t\n\r]', '', str(phone))
-            clean = re.sub(r'[^0-9]', '', clean)
-            
-            # Handle edge cases where phone might be too short
-            if len(clean) < 8:
-                return ""
-            
-            # Remove country code if present (55 for Brazil)
-            if clean.startswith('55') and len(clean) > 10:
-                clean = clean[2:]
-            
-            # Brazilian area codes
-            valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
-            
-            # If 10 digits and starts with valid area code, add mobile prefix
-            if len(clean) == 10 and clean[:2] in valid_area_codes:
-                area_code = clean[:2]
-                number = clean[2:]
-                # If it's a mobile number (starts with 6, 7, 8, or 9) and doesn't have 9 prefix
-                if number[0] in '6789' and not number.startswith('9'):
-                    clean = area_code + '9' + number
-            
-            return clean
-        
-        # Enhanced matching function that tries multiple variants
-        def find_phone_match(target_phone, sheet_data, whatsapp_col_index):
-            clean_target = clean_phone_for_match(target_phone)
-            
-            # Brazilian area codes
-            valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
-            
-            # Create variants to try
-            variants = [clean_target]
-            
-            # If target is 10 digits with area code, try adding mobile prefix
-            if len(clean_target) == 10 and clean_target[:2] in valid_area_codes:
-                area_code = clean_target[:2]
-                number = clean_target[2:]
-                # Add mobile prefix for numbers that start with 6, 7, 8, or 9
-                if number[0] in '6789':
-                    variants.append(area_code + '9' + number)
-            
-            # If target has mobile prefix, also try without it
-            if len(clean_target) == 11 and clean_target[:2] in valid_area_codes:
-                area_code = clean_target[:2]
-                mobile_prefix = clean_target[2]
-                number = clean_target[3:]
-                if mobile_prefix == '9' and number[0] in '6789':
-                    variants.append(area_code + number)
-            
+        # Enhanced matching function using centralized utilities
+        def find_phone_match_local(target_phone, sheet_data, whatsapp_col_index):
+            variants = generate_phone_variants(target_phone)
             print(f"Trying phone variants: {variants}")
             
             # Try to find a match with any variant
             for variant in variants:
                 for i, row in enumerate(sheet_data[1:], start=2):
                     if whatsapp_col_index < len(row):
-                        sheet_phone = clean_phone_for_match(row[whatsapp_col_index])
+                        sheet_phone = clean_phone_for_matching(row[whatsapp_col_index])
                         if sheet_phone and sheet_phone == variant:
                             print(f"Found match for variant '{variant}' at row {i}")
                             return i
@@ -528,12 +412,16 @@ def sync_record_to_sheet(record_data: Dict[str, Any], whatsapp_number: str, shee
         
         # Find matching row using enhanced matching
         target_phone = whatsapp_number.split('@')[0] if '@' in whatsapp_number else whatsapp_number
-        target_row = find_phone_match(target_phone, sheet_data, whatsapp_col_index)
+        target_row = find_phone_match_local(target_phone, sheet_data, whatsapp_col_index)
         
         if target_row is None:
             print(f"Row with WhatsApp number {whatsapp_number} not found - creating new row")
-            # Create new row instead of failing
-            return create_new_row_in_sheet(record_data, whatsapp_number, sheet_name)
+            # For new row creation, merge record_data with essential_fields
+            new_row_data = {}
+            if essential_fields:
+                new_row_data.update(essential_fields)
+            new_row_data.update(record_data)  # record_data takes precedence
+            return create_new_row_in_sheet(new_row_data, whatsapp_number, sheet_name)
         
         # Update the fields that exist in both record_data and headers
         updated_fields = []

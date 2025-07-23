@@ -9,6 +9,9 @@ from loaders.db_loader import get_dataframe
 from utils.ui_helpers import parse_imoveis
 from services.preloader import start_background_preload, display_preloader_status
 
+# Import centralized phone utilities
+from services.phone_utils import format_phone_for_display as format_phone_display
+
 # ─── PAGE CONFIG ─────────────────────────────────────────────────────────
 st.set_page_config(page_title="Home Dashboard", layout="wide")
 
@@ -78,14 +81,8 @@ if DEBUG:
 # ─── TRANSFORM COLUMNS ─────────────────────────────────────────────────────
 # 1) Phone formatting: (XX) XXXXX-XXXX
 def format_brazilian_phone(raw: str) -> str:
-    digits = re.sub(r"\D", "", raw or "")
-    # Remove country code if present
-    if digits.startswith("55") and len(digits) > 10:
-        digits = digits[2:]
-    if len(digits) >= 10:
-        area, rest = digits[:2], digits[2:]
-        return f"({area}) {rest[:-4]}-{rest[-4:]}"
-    return raw
+    # Use centralized phone utility for consistent behavior
+    return format_phone_display(raw)
 
 
 # 2) Extract addresses from IMOVEIS
@@ -202,3 +199,37 @@ with bulk_col3:
 st.write(
     "💡 **Tip:** Click on any row in the table above to open the processor for that record."
 )
+
+# ─── BACKGROUND OPERATIONS SIDEBAR ─────────────────────────────────────────
+# Sync global background operations to session state for UI updates
+try:
+    import time
+    from services.background_operations import global_storage, get_running_operations, render_operations_sidebar
+    
+    global_storage.sync_to_session_state()
+    
+    # Auto-refresh with rate limiting if there are running operations
+    running_ops = get_running_operations()
+    if running_ops:
+        # Rate-limited refresh: only refresh every few seconds when operations are running
+        current_time = time.time()
+        last_refresh_key = "last_bg_ops_refresh_dashboard"
+        
+        if last_refresh_key not in st.session_state:
+            st.session_state[last_refresh_key] = 0
+        
+        # Refresh every 3 seconds when operations are running
+        if current_time - st.session_state[last_refresh_key] > 3.0:
+            st.session_state[last_refresh_key] = current_time
+            st.rerun()
+        
+except Exception as e:
+    # Only show error in sidebar if debug mode is enabled (check session state)
+    if st.session_state.get("debug_mode", False):
+        st.sidebar.error(f"Error syncing background operations: {e}")
+
+# Render background operations status in sidebar
+try:
+    render_operations_sidebar()
+except Exception as e:
+    st.sidebar.error(f"Error displaying operations status: {e}")

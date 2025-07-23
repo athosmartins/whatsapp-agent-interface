@@ -16,6 +16,9 @@ from typing import Dict, List
 import re
 from functools import lru_cache
 
+# Import centralized phone utilities
+from services.phone_utils import clean_phone_for_matching
+
 # Global cache for ultra-fast lookups
 _phone_to_cpf_cache = {}
 _cpf_to_properties_cache = {}
@@ -36,26 +39,9 @@ class UltraFastPropertyLoader:
     @staticmethod
     @lru_cache(maxsize=10000)
     def clean_phone_ultra_fast(phone: str) -> str:
-        """Ultra-fast phone cleaning with LRU cache."""
-        if not phone:
-            return ""
-        
-        # Remove all non-digits
-        clean = re.sub(r'[^0-9]', '', str(phone))
-        
-        if len(clean) < 8:
-            return ""
-        
-        # Remove country code
-        if clean.startswith('55') and len(clean) > 10:
-            clean = clean[2:]
-        
-        # Brazilian mobile number normalization
-        if len(clean) == 10 and clean[:2] in ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']:
-            if clean[2] in '6789':
-                clean = clean[:2] + '9' + clean[2:]
-        
-        return clean
+        """Ultra-fast phone cleaning using centralized utilities with LRU cache."""
+        # Use centralized phone utility for consistent behavior
+        return clean_phone_for_matching(phone)
 
     @staticmethod
     @lru_cache(maxsize=10000) 

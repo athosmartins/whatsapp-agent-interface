@@ -12,6 +12,9 @@ import gzip
 import json
 import duckdb
 
+# Import centralized phone utilities
+from services.phone_utils import clean_phone_for_matching, generate_phone_variants
+
 # Google Drive folder ID for mega_data_set files
 MEGA_DATA_SET_FOLDER_ID = "1yfGnHjmaEOCbrEcYLXaVcW5_bmvzU98l"
 CACHE_DURATION = 3600  # 1 hour in seconds
@@ -451,9 +454,9 @@ def get_properties_for_phone(phone_number: str) -> List[Dict]:
         }
         
         # Check if this is a test phone first
-        clean_phone = clean_phone_for_match(phone_number)
+        clean_phone = clean_phone_for_matching(phone_number)
         for test_phone, test_cpf in test_phone_mappings.items():
-            if clean_phone_for_match(test_phone) == clean_phone:
+            if clean_phone_for_matching(test_phone) == clean_phone:
                 properties = find_properties_by_documento(test_cpf)
                 return properties
         
@@ -513,41 +516,10 @@ def get_properties_for_phone(phone_number: str) -> List[Dict]:
 
 def clean_phone_for_match(phone: str) -> str:
     """
-    Clean phone number for matching (same logic as in spreadsheet.py).
+    Clean phone number for matching using centralized utilities.
     """
-    if not phone or pd.isna(phone):
-        return ""
-    
-    import re
-    # Remove whitespace and special characters
-    clean = re.sub(r'[\s\t\n\r]', '', str(phone))
-    clean = re.sub(r'[^0-9]', '', clean)
-    
-    # Remove @s.whatsapp.net if present
-    if '@' in str(phone):
-        clean = str(phone).split('@')[0]
-        clean = re.sub(r'[^0-9]', '', clean)
-    
-    # Handle edge cases
-    if len(clean) < 8:
-        return ""
-    
-    # Remove country code if present
-    if clean.startswith('55') and len(clean) > 10:
-        clean = clean[2:]
-    
-    # Brazilian area codes
-    valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
-    
-    # If 10 digits and starts with valid area code, add mobile prefix
-    if len(clean) == 10 and clean[:2] in valid_area_codes:
-        area_code = clean[:2]
-        number = clean[2:]
-        # If it's a mobile number and doesn't have 9 prefix
-        if number[0] in '6789' and not number.startswith('9'):
-            clean = area_code + '9' + number
-    
-    return clean
+    # Use centralized phone utility for consistent behavior
+    return clean_phone_for_matching(phone)
 
 def format_property_for_display(property_dict: Dict) -> Dict:
     """

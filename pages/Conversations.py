@@ -12,6 +12,9 @@ from loaders.db_loader import (
 )
 from services.preloader import start_background_preload, display_preloader_status
 
+# Import centralized phone utilities
+from services.phone_utils import format_phone_for_display as format_phone_display
+
 # Page config
 st.set_page_config(page_title="Conversations", layout="wide")
 st.title("💬 Conversations")
@@ -50,28 +53,8 @@ def load_conversation_details(conversation_id: str):
 # Format phone number for display
 def format_phone_for_display(phone_number: str) -> str:
     """Format phone number to (XX) XXXXX-XXXX format."""
-    if not phone_number:
-        return ""
-
-    # Extract just the numeric part
-    clean_number = re.sub(r"\D", "", phone_number)
-
-    # Remove @s.whatsapp.net suffix if present
-    if "@" in phone_number:
-        clean_number = phone_number.split("@")[0]
-        clean_number = re.sub(r"\D", "", clean_number)
-
-    # Remove country code if present (assuming Brazilian numbers)
-    if clean_number.startswith("55") and len(clean_number) > 10:
-        clean_number = clean_number[2:]
-
-    # Format as (XX) XXXXX-XXXX
-    if len(clean_number) >= 10:
-        area_code = clean_number[:2]
-        number = clean_number[2:]
-        return f"({area_code}) {number[:-4]}-{number[-4:]}"
-
-    return phone_number
+    # Use centralized phone utility for consistent behavior
+    return format_phone_display(phone_number)
 
 
 # Format timestamp for display
@@ -1481,3 +1464,36 @@ except Exception as e:
     st.info(
         "Please check if the database is available and contains the conversations table."
     )
+
+# ─── BACKGROUND OPERATIONS SIDEBAR ─────────────────────────────────────────
+# Sync global background operations to session state for UI updates
+try:
+    import time
+    from services.background_operations import global_storage, get_running_operations, render_operations_sidebar
+    
+    global_storage.sync_to_session_state()
+    
+    # Auto-refresh with rate limiting if there are running operations
+    running_ops = get_running_operations()
+    if running_ops:
+        # Rate-limited refresh: only refresh every few seconds when operations are running
+        current_time = time.time()
+        last_refresh_key = "last_bg_ops_refresh_conversations"
+        
+        if last_refresh_key not in st.session_state:
+            st.session_state[last_refresh_key] = 0
+        
+        # Refresh every 3 seconds when operations are running
+        if current_time - st.session_state[last_refresh_key] > 3.0:
+            st.session_state[last_refresh_key] = current_time
+            st.rerun()
+        
+except Exception as e:
+    if DEBUG:
+        st.sidebar.error(f"Error syncing background operations: {e}")
+
+# Render background operations status in sidebar
+try:
+    render_operations_sidebar()
+except Exception as e:
+    st.sidebar.error(f"Error displaying operations status: {e}")

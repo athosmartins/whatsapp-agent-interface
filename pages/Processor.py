@@ -1,11 +1,15 @@
 """Processor.py - Streamlit interface for WhatsApp Agent with authentication."""
 
 import os
+import time
 from datetime import datetime
 
 import pandas as pd
 import streamlit as st
 import requests
+
+# Import centralized phone utilities
+from services.phone_utils import format_phone_for_display as format_phone_display
 
 # Conditional import to prevent crashes when auth not needed
 from config import (
@@ -21,6 +25,12 @@ from config import (
 from loaders.db_loader import get_dataframe, get_db_info, get_conversation_messages
 from services.spreadsheet import sync_record_to_sheet, format_phone_for_storage, format_address_field
 from services.voxuy_api import send_whatsapp_message
+from services.background_operations import (
+    queue_sync_operation,
+    queue_archive_operation,
+    render_operations_sidebar,
+    get_running_operations
+)
 from services.mega_data_set_loader import (
     get_properties_for_phone,
     format_property_for_display,
@@ -52,27 +62,8 @@ from utils.sync_ui import (
 
 def format_phone_for_display(phone_number: str) -> str:
     """Format phone number to (XX) XXXXX-XXXX format for display."""
-    if not phone_number:
-        return ""
-    
-    # Remove any non-digit characters and @domain suffix
-    clean_phone = phone_number.split('@')[0] if '@' in phone_number else phone_number
-    clean_phone = ''.join(filter(str.isdigit, clean_phone))
-    
-    # Remove country code if present (assuming Brazilian numbers)
-    if clean_phone.startswith('55') and len(clean_phone) > 10:
-        clean_phone = clean_phone[2:]
-    
-    # Format as (XX) XXXXX-XXXX if we have at least 10 digits
-    if len(clean_phone) >= 10:
-        area_code = clean_phone[:2]
-        if len(clean_phone) == 11:  # Mobile number
-            number_part = clean_phone[2:7] + '-' + clean_phone[7:]
-        else:  # Landline number (10 digits)
-            number_part = clean_phone[2:6] + '-' + clean_phone[6:]
-        return f"({area_code}) {number_part}"
-    
-    return phone_number  # Return original if can't format
+    # Use centralized phone utility for consistent behavior
+    return format_phone_display(phone_number)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CONVERSATION ARCHIVE FUNCTION
@@ -1159,6 +1150,18 @@ def reset_to_original(idx):
 
 def update_field(idx, field, value):
     """Update a field value directly in master_df."""
+    
+    # Prevent updates during widget initialization to avoid false change detection
+    initialization_key = f"initializing_widgets_{idx}"
+    if st.session_state.get(initialization_key, False):
+        # During initialization, only skip if the value hasn't actually changed
+        # This allows real user changes to be processed even during initialization phase
+        if idx in st.session_state.original_values:
+            original = st.session_state.original_values[idx]
+            if field in original and compare_values(original[field], value):
+                return  # Skip update - value is same as original (initialization)
+        # If we reach here during initialization, it means the value actually changed
+        # So we allow the update to proceed
     # Ensure the column exists in master_df
     if field not in st.session_state.master_df.columns:
         # Add missing column with default values
@@ -1402,21 +1405,20 @@ with nav_archive_col:
         conversation_id = row.get("conversation_id", row.get("whatsapp_number", ""))
         
         if phone_number:
-            # Show loading state
-            with st.spinner("Arquivando conversa..."):
-                result = archive_conversation(phone_number, conversation_id)
-            
-            # Show result to user
-            if result["success"]:
-                st.success(result["message"])
-                # Optionally refresh the page or navigate to next conversation
-                st.rerun()
-            else:
-                st.error(f"{result['message']}")
-                if "error" in result and DEBUG:
-                    st.sidebar.error(f"Archive Debug: {result['error']}")
-                    if "details" in result:
-                        st.sidebar.json(result["details"])
+            # Queue archive operation in background
+            try:
+                operation_id = queue_archive_operation(phone_number, conversation_id)
+                
+                # Show immediate feedback
+                st.success(f"✅ Archive queued! (Operation ID: {operation_id[:8]}...)")
+                st.info("📁 The conversation will be archived in the background. Check the sidebar for progress.")
+                
+            except Exception as e:
+                st.error(f"❌ Error queueing archive operation: {e}")
+                if DEBUG:
+                    import traceback
+                    st.write("**Full error traceback:**")
+                    st.code(traceback.format_exc())
         else:
             st.error("Número de telefone não encontrado para esta conversa.")
 with nav_next_col:
@@ -1561,9 +1563,9 @@ with left_col:
 
         try:
             # Step 1: Debug phone cleaning
-            from services.mega_data_set_loader import clean_phone_for_match
+            from services.phone_utils import clean_phone_for_matching
 
-            clean_phone = clean_phone_for_match(phone_number)
+            clean_phone = clean_phone_for_matching(phone_number)
             debug_info["clean_phone"] = clean_phone
 
             # Step 2: Debug spreadsheet mapping
@@ -1599,7 +1601,7 @@ with left_col:
                 for row_idx, data_row in enumerate(sheet_data[1:], 1):  # Skip header
                     if phone_col_index is not None and phone_col_index < len(data_row):
                         sheet_phone = data_row[phone_col_index]
-                        sheet_phone_clean = clean_phone_for_match(sheet_phone)
+                        sheet_phone_clean = clean_phone_for_matching(sheet_phone)
 
                         if sheet_phone_clean == clean_phone:
                             cpf = (
@@ -2311,6 +2313,10 @@ st.markdown("---")
 # ─── CLASSIFICAÇÃO & RESPOSTA ───────────────────────────────────────────────
 st.subheader("📝 Classificação e Resposta")
 
+# Set initialization flag to prevent false change detection during widget creation
+initialization_key = f"initializing_widgets_{idx}"
+st.session_state[initialization_key] = True
+
 # Create two columns for presets and racional
 preset_col, racional_col = st.columns([1, 1])
 
@@ -2793,10 +2799,35 @@ with right_col:
                     st.session_state[f"show_followup_modal_{idx}"] = False
                     st.rerun()
 
+    # Clear initialization flag - widgets are now created and initialized
+    if initialization_key in st.session_state:
+        del st.session_state[initialization_key]
+
     # Show modifications status
     if idx in st.session_state.original_values:
         original = st.session_state.original_values[idx]
         current = st.session_state.master_df.iloc[idx].to_dict()
+        
+        # TEMPORARY DEBUG: Identify why fields are being detected as changed  
+        if DEV and DEBUG:  # Only show in debug mode now
+            st.write("🐛 **REAL DEBUG: Change Detection Analysis**")
+            st.write("**Original values (stored when page loaded):**")
+            problematic_fields = ['classificacao', 'intencao', 'pagamento', 'percepcao_valor_esperado', 'resposta']
+            for field in problematic_fields:
+                if field in original:
+                    st.write(f"  {field}: {repr(original[field])}")
+            
+            st.write("**Current dataframe values:**")
+            for field in problematic_fields:
+                if field in current:
+                    st.write(f"  {field}: {repr(current[field])}")
+            
+            st.write("**Field comparisons:**")
+            for field in problematic_fields:
+                if field in original and field in current:
+                    are_equal = compare_values(original[field], current[field])
+                    st.write(f"  {field}: {repr(original[field])} → {repr(current[field])} (Equal: {are_equal})")
+        
         modified_fields = []
         for field in original:
             if field in current and not compare_values(original[field], current[field]):
@@ -2931,100 +2962,113 @@ with sync_col:
         if "assigned_properties" in st.session_state and conversation_id in st.session_state.assigned_properties:
             assigned_property = st.session_state.assigned_properties[conversation_id]
 
-        sync_data = {
-            "Classificação do dono do número": st.session_state.get(
-                f"classificacao_select_{idx}", safe_get_field(current_row, "classificacao")
-            ),
-            "status_manual": st.session_state.get(
-                f"intencao_select_{idx}", safe_get_field(current_row, "intencao")
-            ),
-            "Ações": format_list_field(st.session_state.get(f"acoes_select_{idx}", current_row.get("acoes_urblink", []))),
-            "status_manual_urb.link": st.session_state.get(f"status_select_{idx}", safe_get_field(current_row, "status_urblink")),
-            "pagamento": ", ".join(st.session_state.get(
-                f"pagamento_select_{idx}", [safe_get_field(current_row, "pagamento")]
-            )),
-            "percepcao_valor_esperado": st.session_state.get(
-                f"percepcao_select_{idx}", safe_get_field(current_row, "percepcao_valor_esperado")
-            ),
-            "standby_reason": format_list_field(st.session_state.get(f"razao_select_{idx}", current_row.get("razao_standby", []))),
-            "OBS": st.session_state.get(f"obs_input_{idx}", safe_get_field(current_row, "obs")),
-            "stakeholder": format_boolean_field(stakeholder_val),
-            "intermediador": format_boolean_field(intermediador_val),
-            "imovel_em_inventario": format_boolean_field(inventario_val),
-            "standby": format_boolean_field(standby_val),
-            "fup_date": safe_get_field(current_row, "followup_date"),
-            # Property assignment fields (with proper title case formatting)
-            "endereco_bairro": format_address_field(assigned_property.get("BAIRRO", "")) if assigned_property else "",
-            "endereco": format_address_field(assigned_property.get("ENDERECO", "")) if assigned_property else "",
-            "endereco_complemento": format_address_field(assigned_property.get("COMPLEMENTO ENDERECO", "")) if assigned_property else "",
-            "indice_cadastral_list": assigned_property.get("INDICE CADASTRAL", "") if assigned_property else "",
-            # Required fields for new row creation
-            "cpf": current_row.get("cpf", ""),
-            "Nome": current_row.get("display_name", ""),
-            "nome_whatsapp": current_row.get("display_name", ""),
-            "celular": format_phone_for_storage(whatsapp_number.split('@')[0] if '@' in whatsapp_number else whatsapp_number),
-            # Additional fields that might be in spreadsheet
-            "imovel_anunciado": format_boolean_field(current_row.get("imovel_anunciado", False)),
-            "Empresa": current_row.get("empresa", ""),
-            "cnpj": current_row.get("cnpj", ""),
-            "OBS_urb.link": current_row.get("obs_urblink", ""),
-        }
+        # SIMPLIFIED SYNC: Use the same logic as the working display system
+        def detect_changed_fields_for_sync():
+            """Detect changed fields using the same proven logic as the display system."""
+            changed_fields = {}
+            
+            # Only proceed if we have original values stored (same as display system)
+            if idx not in st.session_state.original_values:
+                return changed_fields
+                
+            original = st.session_state.original_values[idx]
+            current = st.session_state.master_df.iloc[idx].to_dict()
+            
+            # Field mapping from database field name to spreadsheet column name
+            field_to_spreadsheet_mapping = {
+                "classificacao": "Classificação do dono do número",
+                "intencao": "status_manual", 
+                "acoes_urblink": "Ações",
+                "status_urblink": "status_manual_urb.link",
+                "pagamento": "pagamento",
+                "percepcao_valor_esperado": "percepcao_valor_esperado",
+                "razao_standby": "standby_reason",
+                "resposta": "resposta", 
+                "obs": "OBS",
+                "stakeholder": "stakeholder",
+                "intermediador": "intermediador", 
+                "inventario_flag": "imovel_em_inventario",
+                "standby": "standby",
+            }
+            
+            # Use the same comparison logic as the display system
+            for field in original:
+                if field in current and not compare_values(original[field], current[field]):
+                    # Map to spreadsheet column name if available
+                    spreadsheet_field = field_to_spreadsheet_mapping.get(field, field)
+                    
+                    # Format the value appropriately for spreadsheet
+                    current_value = current[field]
+                    if isinstance(current_value, bool):
+                        formatted_value = "TRUE" if current_value else "FALSE"
+                    elif isinstance(current_value, list):
+                        formatted_value = ", ".join(str(item) for item in current_value) if current_value else ""
+                    else:
+                        formatted_value = str(current_value) if current_value is not None else ""
+                    
+                    changed_fields[spreadsheet_field] = formatted_value
+                    
+                    if DEV and DEBUG:
+                        st.write(f"🔄 Sync will update: {spreadsheet_field}")
+                        st.write(f"   Original: {repr(original[field])}")
+                        st.write(f"   Current: {repr(current[field])}")
+                        st.write(f"   Formatted for sync: {repr(formatted_value)}")
+            
+            # Special handling for property assignment fields (always include if assigned_property exists)
+            if assigned_property:
+                property_fields = {
+                    "endereco_bairro": format_address_field(assigned_property.get("BAIRRO", "")),
+                    "endereco": format_address_field(assigned_property.get("ENDERECO", "")),
+                    "endereco_complemento": format_address_field(assigned_property.get("COMPLEMENTO ENDERECO", "")),
+                    "indice_cadastral_list": assigned_property.get("INDICE CADASTRAL", ""),
+                }
+                for field, value in property_fields.items():
+                    if value:  # Only include non-empty property fields
+                        changed_fields[field] = value
+                        if DEV and DEBUG:
+                            st.write(f"🏠 Property field: {field} = {value}")
+            
+            return changed_fields
 
-        # Debug: Show formatted sync data
-        if DEV and DEBUG:
-            st.write("**Formatted sync data:**")
-            for key, value in sync_data.items():
-                st.write(f"  {key}: {repr(value)} (type: {type(value)})")
+        # Removed old debug code - real issue was widget initialization triggering update_field()
+        
+        # Get only the changed fields using the same logic as display system
+        sync_data = detect_changed_fields_for_sync()
+        
+        # Show debug info about sync detection
+        if DEV and DEBUG and sync_data:
+            st.write(f"**Sync system detected {len(sync_data)} changed field(s):**")
+            for field, value in sync_data.items():
+                st.write(f"  {field}: {repr(value)}")
+        
+        # If no fields changed, show message and exit
+        if not sync_data:
+            st.info("ℹ️ No changes detected. Nothing to sync.")
+        else:
+            # Add essential fields for row identification and creation if needed
+            # These are only added if the row doesn't exist in the spreadsheet
+            essential_fields = {
+                "cpf": current_row.get("cpf", ""),
+                "Nome": current_row.get("display_name", ""),
+                "nome_whatsapp": current_row.get("display_name", ""),
+                "celular": format_phone_for_storage(whatsapp_number.split('@')[0] if '@' in whatsapp_number else whatsapp_number),
+            }
 
-        # Sync to Google Sheet
-        with st.spinner("Syncing to Google Sheet..."):
+            # Queue sync operation in background (partial update mode)
             try:
-                result = sync_record_to_sheet(sync_data, whatsapp_number, "report")
-
-                if result["success"]:
-                    action = result["action"]
-                    row_number = result["row_number"]
-                    
-                    if action == "created":
-                        st.success(f"✅ New row created in Google Sheet! (Row #{row_number})")
-                    elif action == "updated":
-                        st.success(f"✅ Record updated in Google Sheet! (Row #{row_number})")
-                    elif action == "already_synced":
-                        st.info(f"ℹ️ Spreadsheet already has identical values (Row #{row_number})")
-                    
-                    # Mark as synced in the dataframe
-                    st.session_state.master_df.at[idx, "sheet_synced"] = True
-                    
-                    # Show detailed field mapping table
-                    if "field_mappings" in result and result["field_mappings"]:
-                        st.subheader("📊 Sync Results")
-                        mapping_data = []
-                        for field, value in result["field_mappings"].items():
-                            mapping_data.append({
-                                "System Field": field,
-                                "Value": str(value),
-                                "Action": f"{action.title()} in Row #{row_number}"
-                            })
-                        
-                        if mapping_data:
-                            import pandas as pd
-                            df_mapping = pd.DataFrame(mapping_data)
-                            st.dataframe(df_mapping, use_container_width=True)
-                    
-                    if DEV and DEBUG:
-                        st.write("**Full sync result:**", result)
-                        
-                else:
-                    st.error(f"❌ Failed to sync to Google Sheet: {result.get('error', 'Unknown error')}")
-                    if DEV and DEBUG:
-                        st.write("**WhatsApp number for sync:**", whatsapp_number)
-                        st.write("**Full sync result:**", result)
-
+                operation_id = queue_sync_operation(sync_data, whatsapp_number, "report", essential_fields)
+                
+                # Mark as synced in the dataframe (optimistic update)
+                st.session_state.master_df.at[idx, "sheet_synced"] = True
+                
+                # Show immediate feedback
+                st.success(f"✅ Sync queued! (Operation ID: {operation_id[:8]}...)")
+                st.info("📋 The sync will continue in the background. Check the sidebar for progress.")
+                
             except Exception as e:
-                st.error(f"❌ Error during sync: {e}")
+                st.error(f"❌ Error queueing sync operation: {e}")
                 if DEV and DEBUG:
                     import traceback
-
                     st.write("**Full error traceback:**")
                     st.code(traceback.format_exc())
 
@@ -3036,6 +3080,37 @@ with bot_next_col:
         on_click=goto_next,
         use_container_width=True,
     )
+
+# ─── BACKGROUND OPERATIONS SIDEBAR ─────────────────────────────────────────
+# Sync global background operations to session state for UI updates
+try:
+    from services.background_operations import global_storage
+    global_storage.sync_to_session_state()
+    
+    # Auto-refresh with rate limiting if there are running operations
+    running_ops = get_running_operations()
+    if running_ops:
+        # Rate-limited refresh: only refresh every few seconds when operations are running
+        current_time = time.time()
+        last_refresh_key = "last_bg_ops_refresh"
+        
+        if last_refresh_key not in st.session_state:
+            st.session_state[last_refresh_key] = 0
+        
+        # Refresh every 3 seconds when operations are running
+        if current_time - st.session_state[last_refresh_key] > 3.0:
+            st.session_state[last_refresh_key] = current_time
+            st.rerun()
+        
+except Exception as e:
+    if DEBUG:
+        st.sidebar.error(f"Error syncing background operations: {e}")
+
+# Render background operations status in sidebar
+try:
+    render_operations_sidebar()
+except Exception as e:
+    st.sidebar.error(f"Error displaying operations status: {e}")
 
 # ─── PROPERTY MODAL ─────────────────────────────────────────────────────────
 # Check if we need to show the property modal

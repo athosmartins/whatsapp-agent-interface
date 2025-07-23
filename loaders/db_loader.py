@@ -6,6 +6,9 @@ import time
 import streamlit as st
 import duckdb
 
+# Import centralized phone utilities
+from services.phone_utils import clean_phone_for_matching, generate_phone_variants
+
 GDRIVE_FILE_ID   = "1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw"   # snapshot folder/file ID
 LOCAL_DB_PATH    = "whatsapp_conversations.db"           # always the same name
 TABLE            = "deepseek_results"                    # what the UI expects
@@ -403,79 +406,7 @@ def get_conversations_with_sheets_data() -> pd.DataFrame:
             
             sheets_df = pd.DataFrame(data_rows, columns=unique_headers)
             
-            # Advanced phone normalization and variant generation
-            def normalize_phone(phone):
-                if not phone or pd.isna(phone):
-                    return ""
-                
-                import re
-                clean = re.sub(r'[\s\t\n\r]', '', str(phone))
-                clean = re.sub(r'[^0-9]', '', clean)
-                
-                if len(clean) < 8:
-                    return ""
-                
-                if clean.startswith('55') and len(clean) > 10:
-                    clean = clean[2:]
-                
-                valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
-                
-                if len(clean) == 10 and clean[:2] in valid_area_codes:
-                    area_code = clean[:2]
-                    number = clean[2:]
-                    if number[0] in '6789' and not number.startswith('9'):
-                        clean = area_code + '9' + number
-                
-                return clean
-            
-            def generate_variants(phone):
-                """Generate all possible variants of a phone number for aggressive matching"""
-                variants = set()
-                base = normalize_phone(phone)
-                if not base:
-                    return variants
-                
-                # Always add the base version
-                variants.add(base)
-                
-                valid_area_codes = ['11', '12', '13', '14', '15', '16', '17', '18', '19', '21', '22', '24', '27', '28', '31', '32', '33', '34', '35', '37', '38', '41', '42', '43', '44', '45', '46', '47', '48', '49', '51', '53', '54', '55', '61', '62', '63', '64', '65', '66', '67', '68', '69', '71', '73', '74', '75', '77', '79', '81', '82', '83', '84', '85', '86', '87', '88', '89', '91', '92', '93', '94', '95', '96', '97', '98', '99']
-                
-                # If 11 digits, try removing the 9
-                if len(base) == 11 and base[:2] in valid_area_codes:
-                    area_code = base[:2]
-                    number = base[2:]
-                    if number[0] == '9':
-                        variants.add(area_code + number[1:])
-                
-                # If 10 digits, AGGRESSIVELY try adding mobile prefix
-                if len(base) == 10 and base[:2] in valid_area_codes:
-                    area_code = base[:2]
-                    number = base[2:]
-                    
-                    # Add 9 prefix for ALL mobile-looking numbers
-                    # This is the key insight - most 10-digit numbers need the 9
-                    if number[0] in '6789':
-                        variants.add(area_code + '9' + number)
-                    
-                    # Also try adding 9 even for numbers starting with other digits
-                    # This covers edge cases where the first digit got corrupted
-                    variants.add(area_code + '9' + number)
-                
-                # If 9 digits, try adding area codes (for partial numbers)
-                if len(base) == 9:
-                    # Try common area codes
-                    for area_code in ['31', '11', '21', '35', '37']:
-                        variants.add(area_code + base)
-                        variants.add(area_code + '9' + base)
-                
-                # If 8 digits, try adding area code + mobile prefix
-                if len(base) == 8:
-                    # Try common area codes with mobile prefix
-                    for area_code in ['31', '11', '21', '35', '37']:
-                        variants.add(area_code + '9' + base)
-                        variants.add(area_code + base)
-                
-                return variants
+            # Use centralized phone utilities
             
             # Find the celular column in sheets data
             celular_col = None
@@ -491,7 +422,7 @@ def get_conversations_with_sheets_data() -> pd.DataFrame:
                 
                 for idx, row in sheets_df.iterrows():
                     phone = row[celular_col]
-                    variants = generate_variants(phone)
+                    variants = generate_phone_variants(phone)
                     
                     # Safety check to ensure variants is iterable
                     if variants:
@@ -515,7 +446,7 @@ def get_conversations_with_sheets_data() -> pd.DataFrame:
                 for idx, conv_row in conversations_df.iterrows():
                     phone = conv_row['phone_number']
                     clean_phone = phone.split('@')[0] if phone and '@' in phone else phone
-                    variants = generate_variants(clean_phone)
+                    variants = generate_phone_variants(clean_phone)
                     
                     # Strategy 1: Try exact variant matching first
                     matched = False
