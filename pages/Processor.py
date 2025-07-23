@@ -202,8 +202,6 @@ def show_property_assignment_popup():
         
         # Load data for selected bairros only (memory-safe approach)
         if not selected_bairros:
-            st.info("Selecione pelo menos um bairro para carregar as propriedades.")
-            st.markdown("💡 **Dica**: Esta abordagem carrega apenas as propriedades dos bairros selecionados para otimizar o uso de memória.")
             filtered_df = pd.DataFrame()  # Empty dataframe when no bairros selected
         else:
             with st.spinner(f"Carregando propriedades para {len(selected_bairros)} bairro(s)..."):
@@ -235,7 +233,7 @@ def show_property_assignment_popup():
             st.markdown(f"**Resultados: {len(final_df)} propriedades encontradas**")
             
             # Select columns to display
-            display_columns = ["BAIRRO", "NOME LOGRADOURO", "ENDERECO", "TIPO CONSTRUTIVO", "AREA TERRENO", "AREA CONSTRUCAO", "INDICE CADASTRAL", "DOCUMENTO PROPRIETARIO", "NOME PROPRIETARIO PBH", "IDADE", "OBITO PROVAVEL"]
+            display_columns = ["BAIRRO", "NOME LOGRADOURO", "ENDERECO", "COMPLEMENTO ENDERECO", "TIPO CONSTRUTIVO", "AREA TERRENO", "AREA CONSTRUCAO", "ANO CONSTRUCAO", "NOME PROPRIETARIO PBH", "DOCUMENTO PROPRIETARIO", "IDADE", "OBITO PROVAVEL", "INDICE CADASTRAL"]
             display_columns = [col for col in display_columns if col in final_df.columns]
             
             # Add selection column - reset index to ensure proper mapping
@@ -300,8 +298,6 @@ def show_property_assignment_popup():
                     st.error(f"Erro na funcionalidade de atribuição de propriedade: {e}")
                     import traceback
                     traceback.print_exc()
-        else:
-            st.info("Nenhuma propriedade encontrada com os filtros aplicados.")
         
         # Close button
         if st.button("Fechar", key="close_property_assignment"):
