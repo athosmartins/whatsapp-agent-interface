@@ -10,6 +10,16 @@ This is a Python Streamlit application. Use these commands:
 - **Run the application**: `streamlit run app.py`
 - **Run tests**: `python test.py`
 
+## CRITICAL DATABASE RULES
+
+**🚨 NEVER USE LOCAL DATABASE FILES 🚨**
+
+- **ALWAYS download database from Google Drive folder ID**: `1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw`
+- **NEVER use local files**: No local database files are allowed in development or production
+- **ALWAYS force fresh download**: Even if a local file exists, it must be replaced with fresh download
+- **Database source is**: Google Drive folder, not local storage
+- **This applies to**: Development, production, testing - ALL environments
+
 ## Architecture Overview
 
 This is a WhatsApp conversation processor for real estate lead qualification. The application has three main interfaces:
@@ -21,6 +31,7 @@ This is a WhatsApp conversation processor for real estate lead qualification. Th
 ### Key Components
 
 - **Data Loading**: Uses `loaders/db_loader.py` to download and load SQLite database from Google Drive containing WhatsApp conversations
+- **CRITICAL DATABASE RULE**: NEVER use local database files. ALWAYS download fresh from Google Drive folder ID `1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw`. Local database files are FORBIDDEN in both development and production.
 - **Authentication**: Optional login system via `auth/login_manager.py` (controlled by `LOGIN_ENABLED` flag)
 - **Configuration**: `config.py` contains all dropdown options for classification, intentions, payment methods, and preset responses
 - **UI Utilities**: `utils/` contains styling and helper functions for parsing conversations and property data
@@ -32,7 +43,7 @@ This is a WhatsApp conversation processor for real estate lead qualification. Th
 
 ### Data Flow
 
-1. Application loads WhatsApp conversation data from SQLite database (auto-downloaded from Google Drive)
+1. Application loads WhatsApp conversation data from SQLite database (ALWAYS auto-downloaded fresh from Google Drive folder ID `1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw`)
 2. Dashboard displays conversations in a grid with phone numbers, names, classifications, and sync status
 3. Users can filter conversations using the Conversations page with advanced filtering options
 4. Individual conversations can be opened in the Processor page for detailed classification
@@ -95,6 +106,12 @@ The system includes comprehensive property data integration via the mega_data_se
 - **Auto-Row Creation**: Missing phone numbers automatically create new rows with proper defaults
 
 ## Development Guidelines
+
+### 🚨 DATABASE LOADING - CRITICAL RULE 🚨
+- **NEVER use local database files** - Always download fresh from Google Drive folder ID `1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw`
+- **Delete any existing local database files** before downloading fresh copy
+- **This rule applies to ALL environments**: development, production, testing
+- **No exceptions**: Even if local file exists, it must be replaced with Google Drive version
 
 ### File Organization
 - **Temporary/Analysis/Debug/Test Files**: Store all debug, analysis, and temporary files that are not needed for production in the `analysis_temp/` folder, never create them on the root or any other folder.

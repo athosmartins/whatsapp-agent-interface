@@ -134,66 +134,50 @@ def _download_from_drive_fallback(dest: str):
     shutil.rmtree(tmp_dir)
 
 
-# Cache to prevent duplicate downloads in the same session
-_db_download_cache = {}
-
 def _ensure_db() -> str:
     """
-    Return a local path to an up-to-date DB file.
-    • Always check for fresh file on startup
-    • If file is older than 1 hour ⇒ fetch from Drive
+    ALWAYS download fresh database from Google Drive folder ID: 1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw
+    NEVER use local cached files - this is a critical requirement.
+    EXCEPTION: Skip download after manual sync to preserve newly synced messages.
     """
     # On Streamlit Cloud write to /tmp; locally write beside the script
     path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREAMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
     
-    # Check if we already downloaded in this session
-    if path in _db_download_cache:
-        if os.path.isfile(path):
-            return path
-        else:
-            # File was deleted, remove from cache
-            _db_download_cache.pop(path, None)
+    # Check if we should skip download after manual sync
+    try:
+        import streamlit as st
+        if hasattr(st, 'session_state') and getattr(st.session_state, 'skip_db_download', False):
+            # Reset the flag and use existing database
+            st.session_state.skip_db_download = False
+            if os.path.isfile(path):
+                print(f"⏭️ Skipping database download after manual sync: {path}")
+                return path
+            else:
+                print(f"⚠️ Skip flag set but no database file found, downloading anyway")
+    except:
+        pass  # Ignore errors if streamlit is not available
     
-    # PRODUCTION FIX: Bail out early in production to prevent timeout/OOM
-    if os.getenv("STREAMLIT_SERVER_HEADLESS") == "true":
-        # In production, use a fallback approach to prevent crashes
-        if not os.path.isfile(path):
-            # Create a minimal fallback to prevent crashes
-            print("Production mode: Using fallback to prevent Drive download timeout")
-            _download_from_drive_fallback(path)
-            _db_download_cache[path] = True
-        return path
-    
-    # Check if file exists and its age
+    # CRITICAL: Always delete existing file and download fresh from Google Drive
     if os.path.isfile(path):
-        # Check if file is older than 1 hour (3600 seconds) - much more aggressive
-        file_age = time.time() - os.path.getmtime(path)
-        if file_age > 3600:  # 1 hour in seconds
-            # File is too old, download fresh copy
-            _download_from_drive(path)
-            _db_download_cache[path] = True
-    else:
-        # File doesn't exist, download it
-        _download_from_drive(path)
-        _db_download_cache[path] = True
+        print(f"🗑️ Deleting existing database file: {path}")
+        os.remove(path)
     
+    # ALWAYS download fresh from Google Drive - no exceptions
+    print(f"📥 Downloading fresh database from Google Drive folder: {GDRIVE_FILE_ID}")
+    _download_from_drive(path)
+    
+    # Verify the download succeeded
+    if not os.path.isfile(path):
+        raise Exception(f"Failed to download database file from Google Drive to {path}")
+    
+    print(f"✅ Fresh database downloaded successfully to: {path}")
     return path
 
-@st.cache_data(ttl=3600, max_entries=2, show_spinner="📥 Carregando banco...")
 def get_dataframe() -> pd.DataFrame:
-    """Return the master table – cached for 1 h and max 2 versions."""
+    """Return the master table - ALWAYS download fresh from Google Drive."""
     db_path = _ensure_db()
     
-    # Get the file modification time for cache invalidation
-    file_mtime = os.path.getmtime(db_path)
-    
-    # Use cached version that's aware of file changes
-    return _load_dataframe_with_cache(db_path, file_mtime)
-
-@st.cache_data(ttl=3600, max_entries=2)
-def _load_dataframe_with_cache(db_path: str, file_mtime: float) -> pd.DataFrame:
-    """Load dataframe with cache that's aware of file changes."""
-    # Use DuckDB for efficient querying
+    # Use DuckDB for efficient querying - no caching, always fresh
     con = duckdb.connect(db_path, read_only=True)
     df = con.execute(f"SELECT * FROM {TABLE}").df()
     con.close()
@@ -209,7 +193,7 @@ def force_refresh_db():
     _last_db_info = None  # Reset the info
     
     # Remove existing local file
-    path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
+    path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREAMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
     if os.path.exists(path):
         os.remove(path)
     

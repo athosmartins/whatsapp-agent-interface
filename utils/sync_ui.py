@@ -320,11 +320,25 @@ def perform_manual_sync(conversation_id: str):
         if conversation_id:
             st.query_params["conversation_id"] = conversation_id
         
+        # Set flag to prevent database redownload after manual sync
+        st.session_state.skip_db_download = True
+        
         # Force UI refresh
         st.rerun()
     else:
         error_msg = result.get("error", "Unknown error")
         st.error(f"❌ Sync failed: {error_msg}")
+        
+        # Even if sync fails, set skip flag to prevent unnecessary database redownload
+        # This prevents the page from redownloading the entire database when sync fails
+        st.session_state.skip_db_download = True
+        
+        # Preserve conversation_id in query params before rerun
+        if conversation_id:
+            st.query_params["conversation_id"] = conversation_id
+        
+        # Still refresh UI to show error state
+        st.rerun()
 
 def cleanup_sync_on_exit(conversation_id: str):
     """Clean up sync resources when leaving a conversation."""

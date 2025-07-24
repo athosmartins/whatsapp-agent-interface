@@ -161,8 +161,22 @@ class ConversationSyncManager:
                     "status": "Missing chat ID",
                 }
 
-            # Cloudflare Worker endpoint
-            worker_url = "https://voxuy-sync-conversation.athosmartins.workers.dev/sync"
+            # Test worker health first
+            health_url = "https://voxuy-sync-conversation.athosmartins.workers.dev/health"
+            try:
+                health_resp = requests.get(health_url, timeout=10)
+                print(f"🏥 **Health Check:** {health_url} returned {health_resp.status_code}")
+                if health_resp.status_code == 200:
+                    print(f"Health response: {health_resp.text[:100]}")
+                else:
+                    print(f"Health error: {health_resp.text[:100]}")
+            except Exception as e:
+                print(f"🏥 **Health Check Failed:** {e}")
+
+            # Cloudflare Worker endpoints to try - focus on /sync since that's what the worker expects
+            worker_endpoints = [
+                "https://voxuy-sync-conversation.athosmartins.workers.dev/sync"
+            ]
             
             payload = {
                 "conversation_id": conversation_id,
@@ -170,84 +184,138 @@ class ConversationSyncManager:
                 "page_size": PAGE_SIZE
             }
 
-            debug_info = {
-                "worker_url": worker_url,
-                "payload": payload,
-                "conversation_id": conversation_id,
-                "chat_id": chat_id,
-                "auth_method": "Cloudflare Worker",
-                "page_size": PAGE_SIZE,
-            }
+            # Try each endpoint until one works
+            response = None
+            last_error = None
+            successful_url = None
+            
+            for worker_url in worker_endpoints:
+                debug_info = {
+                    "worker_url": worker_url,
+                    "payload": payload,
+                    "conversation_id": conversation_id,
+                    "chat_id": chat_id,
+                    "auth_method": "Cloudflare Worker",
+                    "page_size": PAGE_SIZE,
+                }
 
-            print("🔍 **Worker Request Debug:**")
-            print(f"Worker URL: {worker_url}")
-            print(f"Payload: {payload}")
+                print(f"🔍 **Worker Request Debug:** Trying {worker_url}")
+                print(f"Payload: {payload}")
 
-            # Add JavaScript console logging for production debugging
-            import streamlit as st
-            st.markdown(f"""
-            <script>
-            console.log('🔍 SYNC API CALL - Worker URL: {worker_url}');
-            console.log('🔍 SYNC API CALL - Request Payload:', {payload});
-            console.log('🔍 SYNC API CALL - Starting request at:', new Date().toISOString());
-            </script>
-            """, unsafe_allow_html=True)
-
-            try:
-                # Call Cloudflare Worker
-                response = requests.post(
-                    worker_url,
-                    json=payload,
-                    timeout=30,
-                    headers={
-                        "Content-Type": "application/json",
-                        "User-Agent": "UrbanLink-Streamlit/1.0"
-                    }
-                )
-
-                # Debug: Log the response
-                print(f"🔍 **Worker Response Debug:**")
-                print(f"Status Code: {response.status_code}")
-                print(f"Response Headers: {dict(response.headers)}")
-                print(f"Response Text (first 200 chars): {response.text[:200]}")
-                
-                # Add JavaScript console logging for response
-                response_text_safe = response.text.replace('"', '\\"').replace('\n', '\\n')[:200]
+                # Add JavaScript console logging for production debugging
                 st.markdown(f"""
                 <script>
-                console.log('🔍 SYNC API RESPONSE - Status Code: {response.status_code}');
-                console.log('🔍 SYNC API RESPONSE - Headers:', {dict(response.headers)});
-                console.log('🔍 SYNC API RESPONSE - Body (first 200 chars): "{response_text_safe}");
-                console.log('🔍 SYNC API RESPONSE - Response received at:', new Date().toISOString());
+                console.log('🔍 SYNC API CALL - Trying Worker URL: {worker_url}');
+                console.log('🔍 SYNC API CALL - Request Payload:', {payload});
+                console.log('🔍 SYNC API CALL - Starting request at:', new Date().toISOString());
                 </script>
                 """, unsafe_allow_html=True)
 
-                if response.status_code != 200:
-                    error_text = response.text[:500] if response.text else "No response body"
-                    return {
-                        "success": False,
-                        "error": f"Worker error: {response.status_code}",
-                        "messages_added": 0,
-                        "total_fetched": 0,
-                        "status": f"❌ Worker error {response.status_code}",
-                        "debug_info": {
-                            **debug_info,
-                            "response_status": response.status_code,
-                            "response_text": error_text,
-                            "response_headers": dict(response.headers),
-                        },
-                    }
-
-            except requests.exceptions.RequestException as req_error:
-                print(f"🔍 **Worker Request Error:** {req_error}")
+                try:
+                    # Debug: Log exact request details
+                    print(f"🔍 **Request Details:**")
+                    print(f"URL: {worker_url}")
+                    print(f"Method: POST")
+                    print(f"Headers: Content-Type: application/json")
+                    print(f"JSON Payload: {payload}")
+                    
+                    # Call Cloudflare Worker with POST - try both json= and data= methods
+                    import json
+                    
+                    # First try with json parameter (should work)
+                    response = requests.post(
+                        worker_url,
+                        json=payload,
+                        timeout=30,
+                        headers={
+                            "Content-Type": "application/json",
+                            "User-Agent": "UrbanLink-Streamlit/1.0"
+                        }
+                    )
+                    
+                    # If that fails with JSON error, try sending as string
+                    if response.status_code == 400 and "json" in response.text.lower():
+                        print(f"🔄 **Retrying with string payload:** {worker_url}")
+                        response = requests.post(
+                            worker_url,
+                            data=json.dumps(payload),
+                            timeout=30,
+                            headers={
+                                "Content-Type": "application/json",
+                                "User-Agent": "UrbanLink-Streamlit/1.0"
+                            }
+                        )
+                    
+                    # If POST fails with 405, try GET with query params
+                    if response.status_code == 405:
+                        print(f"🔄 **Trying GET:** {worker_url}")
+                        params = {
+                            "conversation_id": conversation_id,
+                            "chat_id": chat_id,
+                            "page_size": PAGE_SIZE
+                        }
+                        response = requests.get(
+                            worker_url,
+                            params=params,
+                            timeout=30,
+                            headers={"User-Agent": "UrbanLink-Streamlit/1.0"}
+                        )
+                    
+                    # If we get a 200 response, use this endpoint
+                    if response.status_code == 200:
+                        successful_url = worker_url
+                        print(f"✅ **Worker Success:** {worker_url} returned 200")
+                        break
+                    # If we get 405, try next endpoint
+                    elif response.status_code == 405:
+                        print(f"❌ **Worker 405:** {worker_url} - Method Not Allowed, trying next...")
+                        last_error = f"405 Method Not Allowed at {worker_url}"
+                        continue
+                    else:
+                        # Other errors, try next endpoint
+                        error_text = response.text[:200] if response.text else "No response body"
+                        print(f"❌ **Worker Error:** {worker_url} returned {response.status_code}")
+                        print(f"Response body: {error_text}")
+                        last_error = f"{response.status_code} error at {worker_url}: {error_text}"
+                        continue
+                        
+                except requests.exceptions.RequestException as req_error:
+                    print(f"❌ **Worker Request Error:** {worker_url} - {req_error}")
+                    last_error = f"Request error at {worker_url}: {req_error}"
+                    continue
+            
+            # If no endpoint worked, return error
+            if not successful_url or not response or response.status_code != 200:
                 return {
                     "success": False,
-                    "error": f"Worker request error: {req_error}",
+                    "error": f"All worker endpoints failed. Last error: {last_error}",
                     "messages_added": 0,
                     "total_fetched": 0,
-                    "status": f"❌ Worker request failed",
-                    "debug_info": {**debug_info, "request_error": str(req_error)},
+                    "status": f"❌ All worker endpoints failed",
+                    "debug_info": {
+                        "endpoints_tried": worker_endpoints,
+                        "last_error": last_error,
+                        "auth_method": "Cloudflare Worker",
+                    },
                 }
+            
+            # Success! Log the response
+            print(f"🔍 **Worker Response Debug:**")
+            print(f"Status Code: {response.status_code}")
+            print(f"Response Headers: {dict(response.headers)}")
+            print(f"Response Text (first 200 chars): {response.text[:200]}")
+            
+            # Add JavaScript console logging for response
+            response_text_safe = response.text.replace('"', '\\"').replace('\n', '\\n')[:200]
+            st.markdown(f"""
+            <script>
+            console.log('🔍 SYNC API RESPONSE - Success with URL: {successful_url}');
+            console.log('🔍 SYNC API RESPONSE - Status Code: {response.status_code}');
+            console.log('🔍 SYNC API RESPONSE - Headers:', {dict(response.headers)});
+            console.log('🔍 SYNC API RESPONSE - Body (first 200 chars): "{response_text_safe}");
+            console.log('🔍 SYNC API RESPONSE - Response received at:', new Date().toISOString());
+            </script>
+            """, unsafe_allow_html=True)
 
             # Parse worker response
             try:
@@ -364,7 +432,10 @@ class ConversationSyncManager:
     def _get_existing_message_count(self, conversation_id: str) -> int:
         """Get count of existing messages in database for this conversation."""
         try:
-            with sqlite3.connect(LOCAL_DB_PATH) as conn:
+            # Get the current database path (don't redownload)
+            import os
+            db_path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREAMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
+            with sqlite3.connect(db_path) as conn:
                 cur = conn.cursor()
                 cur.execute(
                     "SELECT COUNT(*) FROM messages WHERE conversation_id = ?",
@@ -380,7 +451,10 @@ class ConversationSyncManager:
         if not messages:
             return 0
 
-        conn = sqlite3.connect(LOCAL_DB_PATH)
+        # Get the current database path (don't redownload)
+        import os
+        db_path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREAMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
+        conn = sqlite3.connect(db_path)
         cur = conn.cursor()
         added = 0
 
@@ -456,7 +530,10 @@ class ConversationSyncManager:
 
     def _update_conversation_metadata(self, conversation_id: str) -> None:
         """Update conversation metadata after sync."""
-        with sqlite3.connect(LOCAL_DB_PATH) as conn:
+        # Get the current database path (don't redownload)
+        import os
+        db_path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREAMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
+        with sqlite3.connect(db_path) as conn:
             cur = conn.cursor()
             cur.execute(
                 """
