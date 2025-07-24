@@ -688,6 +688,20 @@ try:
 except:
     pass
 
+# Debug information display
+if DEBUG:
+    # Show timezone debug information
+    if 'sync_debug_log' in st.session_state and st.session_state.sync_debug_log:
+        with st.expander("🕐 Timezone Debug Log"):
+            for debug_info in st.session_state.sync_debug_log:
+                st.json(debug_info)
+    
+    # Show image debug information  
+    if 'image_debug_log' in st.session_state and st.session_state.image_debug_log:
+        with st.expander("🖼️ Image Debug Log"):
+            for debug_info in st.session_state.image_debug_log:
+                st.json(debug_info)
+
 # Method 2: Check session storage (set by map navigation)
 if not auto_load_conversation:
     # JavaScript to check session storage and listen for map navigation
@@ -1496,7 +1510,15 @@ with left_col:
 
     # Create contact info HTML with fixed height
     picture = row.get("PictureUrl")
-    # Clean and validate picture URL
+    # Clean and validate picture URL with enhanced debugging
+    picture_debug = {
+        'raw_value': repr(picture),
+        'is_none': picture is None,
+        'is_na': pd.isna(picture) if picture is not None else False,
+        'stripped': str(picture).strip() if picture is not None else '',
+        'conversation_id': conversation_id
+    }
+    
     if (
         picture
         and not pd.isna(picture)
@@ -1504,12 +1526,25 @@ with left_col:
         and str(picture).strip().lower() not in ["none", "null", ""]
     ):
         picture = str(picture).strip()
+        picture_debug['final_url'] = picture
+        picture_debug['status'] = 'valid'
         if DEBUG:
             dbg(f"Picture URL found: {picture[:50]}...")
     else:
         picture = None
+        picture_debug['final_url'] = None
+        picture_debug['status'] = 'invalid'
         if DEBUG:
             dbg(f"No valid picture URL (raw value: {repr(row.get('PictureUrl'))})")
+    
+    # Store debug info in session state for production troubleshooting
+    if 'image_debug_log' not in st.session_state:
+        st.session_state.image_debug_log = []
+    if len(st.session_state.image_debug_log) < 5:  # Only keep last 5 entries
+        st.session_state.image_debug_log.append(picture_debug)
+    
+    # Print debug info for console logging
+    print(f"🖼️ Image Debug: {picture_debug}")
 
     display_name = (
         highlight(row["display_name"], hl_words)
@@ -1539,11 +1574,61 @@ with left_col:
     for card in familiares_list:
         familiares_html += f"<li>{card}</li>"
 
-    # Build picture HTML separately to avoid f-string issues
+    # Build picture HTML with simple error handling
     if picture:
-        picture_html = f'<img src="{picture}" style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; border: 2px solid #ddd;" onerror="this.style.display=\'none\'; this.nextSibling.style.display=\'flex\';" /><div style="width: 80px; height: 80px; border-radius: 50%; background-color: #f0f0f0; display: none; align-items: center; justify-content: center; font-size: 32px; border: 2px solid #ddd;">👤</div>'
+        # Try using a CORS proxy for WhatsApp CDN images
+        original_picture = picture
+        if "pps.whatsapp.net" in picture:
+            # Use a public CORS proxy to bypass WhatsApp CDN restrictions
+            picture_proxied = f"https://corsproxy.io/?{picture}"
+            picture_debug['proxy_url'] = picture_proxied
+        else:
+            picture_proxied = picture
+            
+        # Create unique IDs for this image
+        img_id = f"profile_img_{conversation_id.replace('@', '').replace('+', '').replace('-', '')}"
+        fallback_id = f"fallback_{conversation_id.replace('@', '').replace('+', '').replace('-', '')}"
+        
+        # Simple image with fallback - no complex JavaScript in attributes
+        picture_html = f'''
+        <img id="{img_id}" src="{original_picture}" 
+            style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; border: 2px solid #ddd;" 
+            onerror="this.style.display='none'; document.getElementById('{fallback_id}').style.display='flex';"
+            crossorigin="anonymous" />
+        <div id="{fallback_id}" style="width: 80px; height: 80px; border-radius: 50%; background-color: #f0f0f0; display: none; align-items: center; justify-content: center; font-size: 24px; border: 2px solid #ddd; cursor: help;" 
+             title="Profile picture failed to load">
+            📷
+        </div>
+        
+        <script>
+        // Enhanced image loading with proxy fallback
+        (function() {{
+            const img = document.getElementById('{img_id}');
+            const fallback = document.getElementById('{fallback_id}');
+            let proxyTried = false;
+            
+            if (img) {{
+                img.onerror = function() {{
+                    console.log('🖼️ Image Load Failed:', this.src);
+                    
+                    // Try proxy fallback if not already tried
+                    if (!proxyTried && '{picture_proxied}' !== '{original_picture}') {{
+                        console.log('🖼️ Trying proxy fallback');
+                        proxyTried = true;
+                        this.src = '{picture_proxied}';
+                        return;
+                    }}
+                    
+                    // Show fallback
+                    this.style.display = 'none';
+                    if (fallback) fallback.style.display = 'flex';
+                }};
+            }}
+        }})();
+        </script>
+        '''
     else:
-        picture_html = '<div style="width: 80px; height: 80px; border-radius: 50%; background-color: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 32px; border: 2px solid #ddd;">👤</div>'
+        picture_html = '<div style="width: 80px; height: 80px; border-radius: 50%; background-color: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 32px; border: 2px solid #ddd;" title="No profile picture available">👤</div>'
 
     contact_html = f"""
     <div style="height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9; margin-bottom: 10px;">

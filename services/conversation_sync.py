@@ -184,6 +184,23 @@ class ConversationSyncManager:
                 "page_size": PAGE_SIZE
             }
 
+            # Validate payload before sending
+            try:
+                import json
+                # Test JSON serialization to catch issues early
+                payload_json = json.dumps(payload)
+                if not payload_json or len(payload_json) < 10:
+                    raise ValueError("Payload serialization failed or too short")
+                print(f"🔍 **Payload Validation:** JSON serialized successfully ({len(payload_json)} chars)")
+            except Exception as e:
+                return {
+                    "success": False,
+                    "error": f"Payload validation failed: {str(e)}",
+                    "messages_added": 0,
+                    "total_fetched": 0,
+                    "status": "❌ Invalid payload",
+                }
+
             # Try each endpoint until one works
             response = None
             last_error = None
@@ -211,78 +228,118 @@ class ConversationSyncManager:
                 </script>
                 """, unsafe_allow_html=True)
 
-                try:
-                    # Debug: Log exact request details
-                    print(f"🔍 **Request Details:**")
-                    print(f"URL: {worker_url}")
-                    print(f"Method: POST")
-                    print(f"Headers: Content-Type: application/json")
-                    print(f"JSON Payload: {payload}")
-                    
-                    # Call Cloudflare Worker with POST - try both json= and data= methods
-                    import json
-                    
-                    # First try with json parameter (should work)
-                    response = requests.post(
-                        worker_url,
-                        json=payload,
-                        timeout=30,
-                        headers={
-                            "Content-Type": "application/json",
-                            "User-Agent": "UrbanLink-Streamlit/1.0"
-                        }
-                    )
-                    
-                    # If that fails with JSON error, try sending as string
-                    if response.status_code == 400 and "json" in response.text.lower():
-                        print(f"🔄 **Retrying with string payload:** {worker_url}")
+                # Retry logic for each endpoint
+                max_retries = 3
+                retry_delay = 1  # seconds
+                
+                for attempt in range(max_retries):
+                    try:
+                        # Debug: Log exact request details
+                        print(f"🔍 **Request Details (Attempt {attempt + 1}/{max_retries}):**")
+                        print(f"URL: {worker_url}")
+                        print(f"Method: POST")
+                        print(f"Headers: Content-Type: application/json")
+                        print(f"JSON Payload: {payload}")
+                        
+                        # Ensure payload is properly serialized before each request
+                        try:
+                            validated_payload = json.loads(json.dumps(payload))
+                        except Exception as e:
+                            print(f"❌ **Payload Re-serialization Failed:** {e}")
+                            continue
+                        
+                        # Call Cloudflare Worker with POST - try both json= and data= methods
+                        
+                        # First try with json parameter (should work)
                         response = requests.post(
                             worker_url,
-                            data=json.dumps(payload),
+                            json=validated_payload,
                             timeout=30,
                             headers={
                                 "Content-Type": "application/json",
                                 "User-Agent": "UrbanLink-Streamlit/1.0"
                             }
                         )
-                    
-                    # If POST fails with 405, try GET with query params
-                    if response.status_code == 405:
-                        print(f"🔄 **Trying GET:** {worker_url}")
-                        params = {
-                            "conversation_id": conversation_id,
-                            "chat_id": chat_id,
-                            "page_size": PAGE_SIZE
-                        }
-                        response = requests.get(
-                            worker_url,
-                            params=params,
-                            timeout=30,
-                            headers={"User-Agent": "UrbanLink-Streamlit/1.0"}
-                        )
-                    
-                    # If we get a 200 response, use this endpoint
-                    if response.status_code == 200:
-                        successful_url = worker_url
-                        print(f"✅ **Worker Success:** {worker_url} returned 200")
-                        break
-                    # If we get 405, try next endpoint
-                    elif response.status_code == 405:
-                        print(f"❌ **Worker 405:** {worker_url} - Method Not Allowed, trying next...")
-                        last_error = f"405 Method Not Allowed at {worker_url}"
-                        continue
-                    else:
-                        # Other errors, try next endpoint
-                        error_text = response.text[:200] if response.text else "No response body"
-                        print(f"❌ **Worker Error:** {worker_url} returned {response.status_code}")
-                        print(f"Response body: {error_text}")
-                        last_error = f"{response.status_code} error at {worker_url}: {error_text}"
-                        continue
                         
-                except requests.exceptions.RequestException as req_error:
-                    print(f"❌ **Worker Request Error:** {worker_url} - {req_error}")
-                    last_error = f"Request error at {worker_url}: {req_error}"
-                    continue
+                        # If that fails with JSON error, try sending as string
+                        if response.status_code == 400 and "json" in response.text.lower():
+                            print(f"🔄 **Retrying with string payload (Attempt {attempt + 1}):** {worker_url}")
+                            response = requests.post(
+                                worker_url,
+                                data=json.dumps(validated_payload),
+                                timeout=30,
+                                headers={
+                                    "Content-Type": "application/json",
+                                    "User-Agent": "UrbanLink-Streamlit/1.0"
+                                }
+                            )
+                        
+                        # If POST fails with 405, try GET with query params
+                        if response.status_code == 405:
+                            print(f"🔄 **Trying GET (Attempt {attempt + 1}):** {worker_url}")
+                            params = {
+                                "conversation_id": conversation_id,
+                                "chat_id": chat_id,
+                                "page_size": PAGE_SIZE
+                            }
+                            response = requests.get(
+                                worker_url,
+                                params=params,
+                                timeout=30,
+                                headers={"User-Agent": "UrbanLink-Streamlit/1.0"}
+                            )
+                        
+                        # If we get a 200 response, use this endpoint
+                        if response.status_code == 200:
+                            successful_url = worker_url
+                            print(f"✅ **Worker Success (Attempt {attempt + 1}):** {worker_url} returned 200")
+                            break
+                        # If we get 500 (JSON parsing error), retry after delay
+                        elif response.status_code == 500 and "json" in response.text.lower():
+                            error_text = response.text[:200] if response.text else "No response body"
+                            print(f"🔄 **Worker 500 - JSON Error (Attempt {attempt + 1}):** {worker_url}")
+                            print(f"Response body: {error_text}")
+                            if attempt < max_retries - 1:
+                                print(f"⏱️ **Retrying in {retry_delay}s...**")
+                                time.sleep(retry_delay)
+                                retry_delay *= 2  # Exponential backoff
+                                continue
+                            else:
+                                last_error = f"500 JSON error after {max_retries} attempts: {error_text}"
+                                break
+                        # If we get 405, try next endpoint (no retry needed)
+                        elif response.status_code == 405:
+                            print(f"❌ **Worker 405:** {worker_url} - Method Not Allowed, trying next endpoint...")
+                            last_error = f"405 Method Not Allowed at {worker_url}"
+                            break
+                        else:
+                            # Other errors, retry or continue to next endpoint
+                            error_text = response.text[:200] if response.text else "No response body"
+                            print(f"❌ **Worker Error (Attempt {attempt + 1}):** {worker_url} returned {response.status_code}")
+                            print(f"Response body: {error_text}")
+                            if attempt < max_retries - 1:
+                                print(f"⏱️ **Retrying in {retry_delay}s...**")
+                                time.sleep(retry_delay)
+                                retry_delay *= 2
+                                continue
+                            else:
+                                last_error = f"{response.status_code} error after {max_retries} attempts: {error_text}"
+                                break
+                                
+                    except requests.exceptions.RequestException as req_error:
+                        print(f"❌ **Worker Request Error (Attempt {attempt + 1}):** {worker_url} - {req_error}")
+                        if attempt < max_retries - 1:
+                            print(f"⏱️ **Retrying in {retry_delay}s...**")
+                            time.sleep(retry_delay)
+                            retry_delay *= 2
+                            continue
+                        else:
+                            last_error = f"Request error after {max_retries} attempts: {req_error}"
+                            break
+                
+                # If we got a successful response, break out of endpoint loop
+                if successful_url and response and response.status_code == 200:
+                    break
             
             # If no endpoint worked, return error
             if not successful_url or not response or response.status_code != 200:
@@ -468,12 +525,22 @@ class ConversationSyncManager:
                 # Timestamp → BRT naive datetime
                 brt_dt = None
                 if ts:
-                    brt_dt = datetime.datetime.fromtimestamp(
-                        ts, tz=datetime.timezone.utc
-                    )
-                    brt_dt = brt_dt.astimezone(
-                        pytz.timezone("America/Sao_Paulo")
-                    ).replace(tzinfo=None)
+                    # Force UTC interpretation - timestamps from WhatsApp are always UTC
+                    utc_dt = datetime.datetime.utcfromtimestamp(ts).replace(tzinfo=datetime.timezone.utc)
+                    brt_dt = utc_dt.astimezone(pytz.timezone("America/Sao_Paulo")).replace(tzinfo=None)
+                    
+                    # Debug logging for production troubleshooting
+                    if len(st.session_state.get('sync_debug_log', [])) < 3:  # Only log first few messages
+                        debug_info = {
+                            'timestamp': ts,
+                            'utc_time': utc_dt.strftime('%H:%M:%S'),
+                            'brt_time': brt_dt.strftime('%H:%M:%S'),
+                            'message_id': msg_id[:10] + '...' if len(msg_id) > 10 else msg_id
+                        }
+                        if 'sync_debug_log' not in st.session_state:
+                            st.session_state.sync_debug_log = []
+                        st.session_state.sync_debug_log.append(debug_info)
+                        print(f"🕐 Timezone Debug: {debug_info}")
 
                 # Content extraction
                 m = msg.get("message", {})
