@@ -54,6 +54,7 @@ from utils.sync_ui import (
     cleanup_sync_on_exit,
     setup_auto_refresh,
 )
+from services.conversation_sync import get_sync_status
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1343,6 +1344,19 @@ def goto_prev():
     if current_conversation_id:
         cleanup_sync_on_exit(current_conversation_id)
     
+    # Clear conversation cache when navigating
+    cache_keys_to_clear = []
+    for key in st.session_state.keys():
+        if any(cache_key in key.lower() for cache_key in [
+            'conversation_data', 'messages_', 'chat_', 'processor_conversation',
+            'current_conversation', 'conversation_history'
+        ]):
+            cache_keys_to_clear.append(key)
+    
+    for key in cache_keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
+    
     st.session_state.idx = max(st.session_state.idx - 1, 0)
     # Update URL with conversation_id
     new_idx = st.session_state.idx
@@ -1361,6 +1375,19 @@ def goto_next():
     current_conversation_id = current_row.get("conversation_id", current_row.get("whatsapp_number", ""))
     if current_conversation_id:
         cleanup_sync_on_exit(current_conversation_id)
+    
+    # Clear conversation cache when navigating
+    cache_keys_to_clear = []
+    for key in st.session_state.keys():
+        if any(cache_key in key.lower() for cache_key in [
+            'conversation_data', 'messages_', 'chat_', 'processor_conversation',
+            'current_conversation', 'conversation_history'
+        ]):
+            cache_keys_to_clear.append(key)
+    
+    for key in cache_keys_to_clear:
+        if key in st.session_state:
+            del st.session_state[key]
     
     st.session_state.idx = min(st.session_state.idx + 1, len(df) - 1)
     # Update URL with conversation_id
@@ -1446,7 +1473,8 @@ if conversation_id:
     if check_for_sync_updates(conversation_id):
         st.rerun()
     
-    # Setup auto-refresh mechanism
+    
+    # Setup regular auto-refresh mechanism
     setup_auto_refresh()
     
     # Render sync header
@@ -2035,6 +2063,19 @@ with left_col:
 
 with right_col:
     # ─── CHAT HISTORY ───────────────────────────────────────────────────────────
+    
+    # Simple sync status indicator
+    if conversation_id and st.session_state.get('auto_sync_enabled', True):
+        sync_status = get_sync_status(conversation_id)
+        if sync_status.get("active", False):
+            next_sync = sync_status.get("next_sync_in", 0)
+            if next_sync > 0:
+                st.info(f"🔄 Auto-sync active • Next check in {int(next_sync)} seconds")
+            else:
+                st.success("🔄 Auto-sync active • Checking for updates...")
+        else:
+            st.warning("⏸️ Auto-sync inactive")
+    
     # Parse the conversation history and display in WhatsApp style
     try:
         # First try to load messages from database if we have a conversation_id

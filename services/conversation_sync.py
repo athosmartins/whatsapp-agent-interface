@@ -143,34 +143,10 @@ class ConversationSyncManager:
                 time.sleep(SYNC_INTERVAL)
 
     def _sync_single_conversation(self, conversation_id: str) -> Dict:
-        """Sync messages for one conversation."""
+        """Sync messages for one conversation using Cloudflare Worker."""
         try:
             # Import here to avoid circular imports
             import requests
-
-            # Use cookies-based authentication (like your working code)
-            cookies = {
-                "intercom-device-id-fyij4g09": "0aef106d-fc5f-468b-b1fc-5895f7629867",
-                "_gcl_au": "1.1.1587009254.1751331469",
-                "_ga": "GA1.1.779566562.1751331470",
-                "_fbp": "fb.1.1751331981705.841783711308725611",
-                "_delighted_web": "{%229nbsfH9ASzqOdnYE%22:{%22_delighted_fst%22:{%22t%22:%221751377860896%22}}}",
-                "ARRAffinity": "4918ce12697d563429e9a8fa569f93d60282c0546949764027b7b20f28437854",
-                "ARRAffinitySameSite": "4918ce12697d563429e9a8fa569f93d60282c0546949764027b7b20f28437854",
-                "_clck": "1xzl9am%7C2%7Cfx9%7C0%7C2008",
-                "_ga_MQ8KT0SKK8": "GS2.1.s1751416954$o2$g0$t1751416954$j60$l0$h0",
-                "_uetsid": "9a0ecd80561711f0ba22652a1eb6ad63",
-                "_uetvid": "3033a1d0363311f0bd47475bac58aa83",
-                ".AspNetCore.Identity.Application": "CfDJ8ERNfom8FeFMkiblNdy-dvjB-9N-QOa2BfSZ-L8LDDLZNv3295-3IIwjyGILffnpAa4vAAjA8DjaZj5ypHaK4ruAapTKktRhE_z_HcqAw_IkTMMOQtvV8_Hh3306AYAciX6W-wHMp5wsYFriVndTXJo7DN41zznYM4WaREbHnwUbR5oWkgDFNUm9ppb760IzRD8ee4zycZZB7Z5L6VA2FwqgjB2IWGiMDJAEfIXNebzPkW5jCp5csTbKfH47wQlk66_Op_JF42ZnVOim-Ne6joQcop3PeXLTIcpEF3D3uN4I1x1T7V816Zhm08P3RD0-9h4t1m9BIqIg7oYWs6NeUQdIWMip-jnujyI-yHztMk05wQ0IaabllowMOq3KrDbJ9d7mDO_TX9DmfEQmanaNH1r4u099Vv7NL9EST4FR5MKpgXtiU6-mVZ1Es8NTsNFVVg1GDJTuqB-ew8uTmJEhobfaqr_BywWSGej95hFNewuNkH130-T4_miqlQlGAmJqRPQJk9zWA5VwlxKOqqQ9l3FXWfs8_NO1QnpRhf6fDtm4VVcvZvaDqZzZGe6SpI5H1Oom044Xdyln1wcnI6JhioYNnHYw9VGBmsvp_KiXeA-Kkth36-iLVShBeGy5mxTwozWtubOjJe78nanPHDJDazoOYlNk0IcmqKEU7i0ShTrZWhAg_89TT8EW1zKBggXhZgjKq-9QET_gBOQ9hh5xEbiagfZ-EVKIvurqtyS3Xs0Q-luBam7dQoTDXkS0mo_YU_xiMfBkNVew57nmnSI9EkbBmpxURW4AyzqS4GwUkk3Y1rpWoi86ryQxeiPFxfLHu3TLjTXsGR1KYTn4eI3YZWW5kD8igXP6EeZYbaJaAbV2bOMv3ahmsL9EAu08DZei2935cBoyktHfpKyB1iOmdDEpkEEXiLcW6_xKIXcB2saUyZwWKS8ZBWsrTw540DHmobFiTceXrj7dvjsVqk-yIi_ZBqHzvIOKXnK8oz1sMt9hHeKEN---hgmp7O7vC4L3IQ",
-                "_ga_HKBN00L8C8": "GS2.1.s1751416194$o7$g1$t1751419910$j60$l0$h0",
-                "_clsk": "1fkepxh%7C1751419911674%7C13%7C1%7Ca.clarity.ms%2Fcollect",
-                "intercom-session-fyij4g09": "c2VIKytmWXQzRXdMeHljbGhDZXRiWVVNTUNkMDRmT1FJTm45d04yV2Y3R2RXdTQ0TFNOak9PS2w0UWtjN3BxRy9ndmpaaDFGWjNzNHpwUVdoN1dJcU0wTDJtYkxrNm40Q1hyMzZaQ1RTQjQ9LS1SNFJQYkdLMDhaR3lrSkN2SG1zTThBPT0=--fee3e9c003d2993cbc4e9481924913a16679626f",
-            }
-
-            print("🔍 **Auth Debug:** Using session cookies (like your working code)")
-            print(
-                "🔍 **Main Cookie:** .AspNetCore.Identity.Application present: {bool(cookies.get('.AspNetCore.Identity.Application'))}"
-            )
 
             # Get chat ID from environment or config
             chat_id = st.secrets.get(
@@ -185,98 +161,126 @@ class ConversationSyncManager:
                     "status": "Missing chat ID",
                 }
 
-            # Get chat ID from environment or config
-            chat_id = st.secrets.get(
-                "VOXUY_CHAT_ID", "07d49a4a-1b9c-4a02-847d-bad0fb3870eb"
-            )
-
-            # Fetch recent messages using cookies (exactly like your working code)
-            url = f"https://web.voxuy.com/api/chats/{chat_id}/conversations/{conversation_id}/messages"
-            params = {"PageSize": PAGE_SIZE}
-
-            # Create session with cookies (like S.cookies.update(COOKIES) in your code)
-            session = requests.Session()
-            session.cookies.update(cookies)
-
-            debug_info = {
-                "url": url,
-                "params": params,
+            # Cloudflare Worker endpoint
+            worker_url = "https://voxuy-sync-conversation.athosmartins.workers.dev/sync"
+            
+            payload = {
                 "conversation_id": conversation_id,
                 "chat_id": chat_id,
-                "auth_method": "Session Cookies",
-                "cookies_count": len(cookies),
+                "page_size": PAGE_SIZE
             }
 
-            print("🔍 **API Request Debug:**")
-            print(f"URL: {url}")
-            print(f"Params: {params}")
-            print(f"Cookies: {len(cookies)} cookies set")
-            print(
-                f"Key cookie present: {bool(cookies.get('.AspNetCore.Identity.Application'))}"
-            )
+            debug_info = {
+                "worker_url": worker_url,
+                "payload": payload,
+                "conversation_id": conversation_id,
+                "chat_id": chat_id,
+                "auth_method": "Cloudflare Worker",
+                "page_size": PAGE_SIZE,
+            }
+
+            print("🔍 **Worker Request Debug:**")
+            print(f"Worker URL: {worker_url}")
+            print(f"Payload: {payload}")
 
             try:
-                response = session.get(url, params=params, timeout=30)
+                # Call Cloudflare Worker
+                response = requests.post(
+                    worker_url,
+                    json=payload,
+                    timeout=30,
+                    headers={
+                        "Content-Type": "application/json",
+                        "User-Agent": "UrbanLink-Streamlit/1.0"
+                    }
+                )
 
                 # Debug: Log the response
-                print(f"🔍 **API Response Debug:**")
+                print(f"🔍 **Worker Response Debug:**")
                 print(f"Status Code: {response.status_code}")
                 print(f"Response Headers: {dict(response.headers)}")
                 print(f"Response Text (first 200 chars): {response.text[:200]}")
 
-                if response.status_code == 401:
-                    # TEMPORARY FIX: Authentication cookies expired
-                    print("⚠️ **TEMPORARY FIX**: Voxuy API authentication cookies expired")
-                    print("   Skipping API sync to prevent blocking conversation loading")
-                    return {
-                        "success": True,  # Return success to not block UI
-                        "error": "Authentication cookies expired - skipping sync",
-                        "messages_added": 0,
-                        "total_fetched": 0,
-                        "status": "⚠️ Auth expired - sync skipped",
-                        "debug_info": {
-                            **debug_info,
-                            "response_status": response.status_code,
-                            "auth_note": "Cookies expired - requires manual renewal",
-                        },
-                    }
-
                 if response.status_code != 200:
+                    error_text = response.text[:500] if response.text else "No response body"
                     return {
                         "success": False,
-                        "error": f"API error: {response.status_code}",
+                        "error": f"Worker error: {response.status_code}",
                         "messages_added": 0,
                         "total_fetched": 0,
-                        "status": f"❌ API error {response.status_code}",
+                        "status": f"❌ Worker error {response.status_code}",
                         "debug_info": {
                             **debug_info,
                             "response_status": response.status_code,
-                            "response_text": response.text[:200],
+                            "response_text": error_text,
                             "response_headers": dict(response.headers),
                         },
                     }
 
             except requests.exceptions.RequestException as req_error:
-                print(f"🔍 **Request Error:** {req_error}")
+                print(f"🔍 **Worker Request Error:** {req_error}")
                 return {
                     "success": False,
-                    "error": f"Request error: {req_error}",
+                    "error": f"Worker request error: {req_error}",
                     "messages_added": 0,
                     "total_fetched": 0,
-                    "status": f"❌ Request failed",
+                    "status": f"❌ Worker request failed",
                     "debug_info": {**debug_info, "request_error": str(req_error)},
                 }
 
-            # Parse successful response
+            # Parse worker response
             try:
-                response_data = response.json()
-                messages = response_data.get("Data", [])
-                print(f"🔍 **API Response Parsed:** Found {len(messages)} messages")
+                worker_data = response.json()
+                print(f"🔍 **Worker Response Parsed:** {worker_data}")
+                
+                # Check if worker request was successful
+                if not worker_data.get("success", False):
+                    worker_error = worker_data.get("error", "Unknown worker error")
+                    voxuy_status = worker_data.get("voxuyStatus", "unknown")
+                    
+                    # Handle authentication errors gracefully (like the old code)
+                    if "401" in str(voxuy_status) or "authentication" in worker_error.lower():
+                        print("⚠️ **Worker Auth Error**: Voxuy authentication failed in worker")
+                        print("   Returning success to not block UI - worker will handle cookie refresh")
+                        return {
+                            "success": True,  # Return success to not block UI
+                            "error": f"Worker auth error: {worker_error}",
+                            "messages_added": 0,
+                            "total_fetched": 0,
+                            "status": "⚠️ Auth error - sync skipped",
+                            "debug_info": {
+                                **debug_info,
+                                "worker_error": worker_error,
+                                "voxuy_status": voxuy_status,
+                                "auth_note": "Worker will handle cookie refresh automatically",
+                            },
+                        }
+                    
+                    # Other errors
+                    return {
+                        "success": False,
+                        "error": f"Worker sync failed: {worker_error}",
+                        "messages_added": 0,
+                        "total_fetched": 0,
+                        "status": f"❌ Worker error",
+                        "debug_info": {
+                            **debug_info,
+                            "worker_error": worker_error,
+                            "voxuy_status": voxuy_status,
+                        },
+                    }
+
+                # Extract messages from worker response
+                messages = worker_data.get("messages", [])
+                total_fetched = worker_data.get("total_fetched", len(messages))
+                
+                print(f"🔍 **Worker Messages:** Found {len(messages)} messages")
+                
             except Exception as parse_error:
-                print(f"🔍 **JSON Parse Error:** {parse_error}")
+                print(f"🔍 **Worker JSON Parse Error:** {parse_error}")
                 return {
                     "success": False,
-                    "error": f"JSON parse error: {parse_error}",
+                    "error": f"Worker JSON parse error: {parse_error}",
                     "messages_added": 0,
                     "total_fetched": 0,
                     "status": f"❌ Parse error",
@@ -293,7 +297,7 @@ class ConversationSyncManager:
             return {
                 "success": True,
                 "messages_added": added,
-                "total_fetched": len(messages),
+                "total_fetched": total_fetched,
                 "timestamp": datetime.datetime.now(),
                 "status": (
                     f"✅ Synced - {added} new messages"
@@ -305,6 +309,7 @@ class ConversationSyncManager:
                     "response_status": response.status_code,
                     "messages_fetched": len(messages),
                     "messages_added": added,
+                    "worker_success": True,
                 },
             }
 

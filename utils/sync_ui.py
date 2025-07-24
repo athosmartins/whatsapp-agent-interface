@@ -219,14 +219,25 @@ def check_for_sync_updates(conversation_id: str) -> bool:
     if result.get("success", False):
         messages_added = result.get("messages_added", 0)
         
-        # Force refresh of conversation data
-        if 'conversation_data' in st.session_state:
-            del st.session_state.conversation_data
+        # Force refresh of conversation data - clear all conversation-related cache
+        cache_keys_to_clear = []
+        for key in st.session_state.keys():
+            if any(cache_key in key.lower() for cache_key in [
+                'conversation_data', 'messages_', 'chat_', 'processor_conversation',
+                'current_conversation', 'conversation_history'
+            ]):
+                cache_keys_to_clear.append(key)
         
-        # Clear any cached message data
-        cache_keys_to_clear = [k for k in st.session_state.keys() if k.startswith('messages_')]
         for key in cache_keys_to_clear:
-            del st.session_state[key]
+            if key in st.session_state:
+                del st.session_state[key]
+        
+        # Also clear any Streamlit data cache that might be holding conversation data
+        if hasattr(st, 'cache_data') and hasattr(st.cache_data, 'clear'):
+            try:
+                st.cache_data.clear()
+            except:
+                pass  # Ignore errors if cache clearing fails
         
         # Show notification for new messages
         if messages_added > 0 and st.session_state.sync_notifications:
@@ -265,19 +276,31 @@ def perform_manual_sync(conversation_id: str):
     if result.get("success", False):
         messages_added = result.get("messages_added", 0)
         
-        # Always force refresh of conversation data, even if no new messages
-        if 'conversation_data' in st.session_state:
-            del st.session_state.conversation_data
+        # Clear conversation cache but preserve navigation state
+        cache_keys_to_clear = []
+        for key in st.session_state.keys():
+            if any(cache_key in key.lower() for cache_key in [
+                'conversation_data', 'messages_', 'chat_', 'processor_conversation',
+                'conversation_history'
+            ]):
+                # Don't clear navigation-critical state like 'current_conversation_id', 'idx', etc.
+                if not any(nav_key in key.lower() for nav_key in [
+                    'current_conversation_id', 'idx', 'selected_', 'show_'
+                ]):
+                    cache_keys_to_clear.append(key)
         
-        # Clear any cached message data
-        cache_keys_to_clear = [k for k in st.session_state.keys() if k.startswith('messages_')]
         for key in cache_keys_to_clear:
-            del st.session_state[key]
+            if key in st.session_state:
+                del st.session_state[key]
         
         if messages_added > 0:
             st.success(f"✅ Synced! {messages_added} new messages added.")
         else:
             st.info("✅ Conversation synced and refreshed.")
+        
+        # Preserve conversation_id in query params before rerun
+        if conversation_id:
+            st.query_params["conversation_id"] = conversation_id
         
         # Force UI refresh
         st.rerun()
