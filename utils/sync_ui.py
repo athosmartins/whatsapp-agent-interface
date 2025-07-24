@@ -260,8 +260,26 @@ def perform_manual_sync(conversation_id: str):
     if debug_mode:
         st.write(f"🔍 **Manual Sync Debug:** Starting sync for {conversation_id}")
     
+    # Console logging for production debugging
+    st.markdown(f"""
+    <script>
+    console.log('🔍 MANUAL SYNC - Starting manual sync for conversation:', '{conversation_id}');
+    console.log('🔍 MANUAL SYNC - Triggered at:', new Date().toISOString());
+    </script>
+    """, unsafe_allow_html=True)
+    
     with st.spinner("🔄 Syncing conversation..."):
         result = manual_sync(conversation_id)
+    
+    # Console log the result
+    result_safe = str(result).replace('"', '\\"').replace('\n', '\\n')[:500]
+    st.markdown(f"""
+    <script>
+    console.log('🔍 MANUAL SYNC - Result received:', '{result_safe}');
+    console.log('🔍 MANUAL SYNC - Success:', {result.get("success", False)});
+    console.log('🔍 MANUAL SYNC - Messages added:', {result.get("messages_added", 0)});
+    </script>
+    """, unsafe_allow_html=True)
     
     if debug_mode:
         st.write(f"🔍 **Manual Sync Result:** {result}")

@@ -2064,9 +2064,22 @@ with left_col:
 with right_col:
     # ─── CHAT HISTORY ───────────────────────────────────────────────────────────
     
-    # Simple sync status indicator
+    # Simple sync status indicator + Console logging for production debugging
     if conversation_id and st.session_state.get('auto_sync_enabled', True):
         sync_status = get_sync_status(conversation_id)
+        
+        # Add JavaScript console logging for production debugging
+        st.markdown(f"""
+        <script>
+        // Production sync debugging - visible in Chrome DevTools Console
+        console.log('🔍 SYNC DEBUG - Conversation ID: {conversation_id}');
+        console.log('🔍 SYNC DEBUG - Sync Status:', {dict(sync_status)});
+        console.log('🔍 SYNC DEBUG - Auto-sync enabled:', {st.session_state.get('auto_sync_enabled', True)});
+        console.log('🔍 SYNC DEBUG - Current URL:', window.location.href);
+        console.log('🔍 SYNC DEBUG - Timestamp:', new Date().toISOString());
+        </script>
+        """, unsafe_allow_html=True)
+        
         if sync_status.get("active", False):
             next_sync = sync_status.get("next_sync_in", 0)
             if next_sync > 0:

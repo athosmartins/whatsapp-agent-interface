@@ -183,6 +183,16 @@ class ConversationSyncManager:
             print(f"Worker URL: {worker_url}")
             print(f"Payload: {payload}")
 
+            # Add JavaScript console logging for production debugging
+            import streamlit as st
+            st.markdown(f"""
+            <script>
+            console.log('🔍 SYNC API CALL - Worker URL: {worker_url}');
+            console.log('🔍 SYNC API CALL - Request Payload:', {payload});
+            console.log('🔍 SYNC API CALL - Starting request at:', new Date().toISOString());
+            </script>
+            """, unsafe_allow_html=True)
+
             try:
                 # Call Cloudflare Worker
                 response = requests.post(
@@ -200,6 +210,17 @@ class ConversationSyncManager:
                 print(f"Status Code: {response.status_code}")
                 print(f"Response Headers: {dict(response.headers)}")
                 print(f"Response Text (first 200 chars): {response.text[:200]}")
+                
+                # Add JavaScript console logging for response
+                response_text_safe = response.text.replace('"', '\\"').replace('\n', '\\n')[:200]
+                st.markdown(f"""
+                <script>
+                console.log('🔍 SYNC API RESPONSE - Status Code: {response.status_code}');
+                console.log('🔍 SYNC API RESPONSE - Headers:', {dict(response.headers)});
+                console.log('🔍 SYNC API RESPONSE - Body (first 200 chars): "{response_text_safe}");
+                console.log('🔍 SYNC API RESPONSE - Response received at:', new Date().toISOString());
+                </script>
+                """, unsafe_allow_html=True)
 
                 if response.status_code != 200:
                     error_text = response.text[:500] if response.text else "No response body"
@@ -276,6 +297,15 @@ class ConversationSyncManager:
                 
                 print(f"🔍 **Worker Messages:** Found {len(messages)} messages")
                 
+                # Console log the successful parsing
+                st.markdown(f"""
+                <script>
+                console.log('🔍 SYNC SUCCESS - Messages extracted:', {len(messages)});
+                console.log('🔍 SYNC SUCCESS - Total fetched:', {total_fetched});
+                console.log('🔍 SYNC SUCCESS - Worker data keys:', {list(worker_data.keys())});
+                </script>
+                """, unsafe_allow_html=True)
+                
             except Exception as parse_error:
                 print(f"🔍 **Worker JSON Parse Error:** {parse_error}")
                 return {
@@ -290,6 +320,14 @@ class ConversationSyncManager:
             # Add messages to database
             added = self._add_messages_to_database(messages, conversation_id)
             print(f"🔍 **Database Update:** {added} new messages added to DB")
+            
+            # Console log database operations
+            st.markdown(f"""
+            <script>
+            console.log('🔍 DATABASE UPDATE - Messages added to DB:', {added});
+            console.log('🔍 DATABASE UPDATE - Conversation ID:', '{conversation_id}');
+            </script>
+            """, unsafe_allow_html=True)
 
             # Update conversation metadata
             self._update_conversation_metadata(conversation_id)
