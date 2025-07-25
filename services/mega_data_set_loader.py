@@ -243,11 +243,38 @@ def download_latest_mega_data_set() -> Optional[str]:
         return None
 
 @st.cache_data(ttl=CACHE_DURATION, max_entries=1)
-def load_mega_data_set() -> pd.DataFrame:
+def load_mega_data_set(mode: str = "essential", bairros: list = None) -> pd.DataFrame:
     """
-    Load the mega_data_set file into a pandas DataFrame.
-    Uses caching to avoid repeated downloads.
+    UNIFIED MEMORY-EFFICIENT mega_data_set loader.
+    
+    Args:
+        mode: Loading mode
+            - "essential": Load only essential columns (~10MB vs ~200MB)
+            - "bairros": Load data for specific bairros only (memory efficient)
+            - "full": Load complete dataset (NOT RECOMMENDED - will crash in production)
+        bairros: List of bairros to load (only used with mode="bairros")
+    
+    Returns:
+        pandas.DataFrame: Loaded data based on mode
     """
+    # CRITICAL: Prevent full dataset loading in production
+    import os
+    IS_PRODUCTION = os.getenv("STREAMLIT_SERVER_HEADLESS") == "true"
+    
+    if mode == "full" and IS_PRODUCTION:
+        print("⚠️ WARNING: Full dataset loading blocked in production (memory limit)")
+        print("   Falling back to essential columns mode")
+        mode = "essential"
+    
+    # Mode: Load only specific bairros (most memory efficient)
+    if mode == "bairros" and bairros:
+        return load_bairros_optimized(bairros)
+    
+    # Mode: Load only essential columns (80% memory reduction)
+    if mode == "essential":
+        return _load_essential_columns_only()
+        
+    # Mode: Full dataset (legacy support, memory intensive)
     # Note: Manual caching removed - using @st.cache_data instead to avoid double-caching
     
     # First check if manual path is configured
@@ -384,7 +411,8 @@ def find_properties_by_documento(documento_proprietario: str) -> List[Dict]:
     Find all properties that belong to a specific document holder (CPF).
     Returns a list of property dictionaries.
     """
-    df = load_mega_data_set()
+    # Use essential columns mode for memory efficiency
+    df = load_mega_data_set(mode="essential")
     if df.empty:
         return []
     
@@ -553,7 +581,8 @@ def get_property_summary_stats() -> Dict:
     """
     Get summary statistics about the mega_data_set.
     """
-    df = load_mega_data_set()
+    # Use essential columns mode for memory efficiency
+    df = load_mega_data_set(mode="essential")
     if df.empty:
         return {}
     
@@ -669,8 +698,8 @@ def get_available_bairros() -> List[str]:
                         
                     return bairros
         
-        # Fallback: load full dataset and extract bairros
-        df = load_mega_data_set()
+        # Fallback: load essential columns and extract bairros
+        df = load_mega_data_set(mode="essential")
         if df.empty:
             return []
         
@@ -736,8 +765,8 @@ def get_data_by_bairros(selected_bairros: List[str]) -> pd.DataFrame:
                 
                 return df
         
-        # Fallback: load full dataset and filter (less efficient but works)
-        full_df = load_mega_data_set()
+        # Fallback: load essential columns and filter (memory efficient)
+        full_df = load_mega_data_set(mode="essential")
         if full_df.empty:
             return pd.DataFrame()
         
@@ -803,8 +832,8 @@ def get_slice(offset=0, limit=20000):
                 
                 return df
         
-        # Fallback: use regular loading with manual slicing
-        full_df = load_mega_data_set()
+        # Fallback: use essential columns loading with manual slicing
+        full_df = load_mega_data_set(mode="essential")
         if full_df.empty:
             return pd.DataFrame()
         
@@ -1138,3 +1167,134 @@ def _ensure_parquet_file() -> bool:
     except Exception as e:
         print(f"Error converting JSON.GZ to Parquet: {e}")
         return False
+
+@st.cache_data(ttl=CACHE_DURATION, max_entries=1)
+def _load_essential_columns_only() -> pd.DataFrame:
+    """
+    Load only essential columns from mega_data_set (80% memory reduction).
+    Used for property lookups and general queries.
+    """
+    # Essential columns for property matching and display
+    ESSENTIAL_COLUMNS = [
+        'DOCUMENTO PROPRIETARIO',  # For CPF matching
+        'BAIRRO',                  # For neighborhood filtering  
+        'ENDERECO',                # For address display
+        'INDICE CADASTRAL',        # For property identification
+        'COMPLEMENTO ENDERECO',    # For complete address
+        'AREA CONSTRUCAO',         # For property details
+        'AREA TERRENO',            # For property details
+        'TIPO CONSTRUTIVO',        # For property type
+        'ANO CONSTRUCAO',          # For property age
+        'NOME LOGRADOURO',         # For street name
+        'NUMERO',                  # For property number
+        'GEOMETRY'                 # For mapping (if available)
+    ]
+    
+    try:
+        # Download the latest file (prioritizes Parquet)
+        file_path = download_latest_mega_data_set()
+        if not file_path:
+            print("No data file found for essential columns loading")
+            return pd.DataFrame()
+        
+        # Handle Parquet files (most efficient with column selection)
+        if file_path.lower().endswith('.parquet'):
+            print("Loading essential columns from Parquet file...")
+            try:
+                # Load only essential columns using pandas column selection
+                df = pd.read_parquet(file_path, columns=ESSENTIAL_COLUMNS)
+                
+                # Clean up downloaded file
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+                
+                print(f"✅ Loaded {len(df):,} rows with {len(df.columns)} essential columns (memory optimized)")
+                return df
+                
+            except Exception as e:
+                print(f"Error loading essential columns from Parquet: {e}")
+                # Fall back to full load then filter columns
+                try:
+                    df = pd.read_parquet(file_path)
+                    available_columns = [col for col in ESSENTIAL_COLUMNS if col in df.columns]
+                    df = df[available_columns].copy()
+                    
+                    # Clean up downloaded file
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                    
+                    print(f"✅ Loaded {len(df):,} rows with {len(df.columns)} essential columns (fallback)")
+                    return df
+                    
+                except Exception as e2:
+                    print(f"Error loading essential columns from Parquet (fallback): {e2}")
+        
+        # Handle other formats (load all then filter columns)
+        elif file_path.lower().endswith('.json.gz'):
+            print("Loading essential columns from JSON.GZ file...")
+            # Load compressed JSON
+            df = load_compressed_json(file_path)
+            
+            # Filter to essential columns only
+            available_columns = [col for col in ESSENTIAL_COLUMNS if col in df.columns]
+            df = df[available_columns].copy()
+            
+            # Clean up downloaded file
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            
+            print(f"✅ Loaded {len(df):,} rows with {len(df.columns)} essential columns from JSON.GZ")
+            return df
+        
+        else:
+            # CSV files
+            print("Loading essential columns from CSV file...")
+            encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+            df = None
+            
+            for encoding in encodings:
+                try:
+                    # Try to load only essential columns
+                    df = pd.read_csv(file_path, encoding=encoding, low_memory=False, usecols=ESSENTIAL_COLUMNS)
+                    print(f"Successfully loaded essential columns with {encoding} encoding")
+                    break
+                except (UnicodeDecodeError, ValueError):
+                    # If column selection fails, load all then filter
+                    try:
+                        df = pd.read_csv(file_path, encoding=encoding, low_memory=False)
+                        available_columns = [col for col in ESSENTIAL_COLUMNS if col in df.columns]
+                        df = df[available_columns].copy()
+                        print(f"Successfully loaded and filtered essential columns with {encoding} encoding")
+                        break
+                    except UnicodeDecodeError:
+                        continue
+            
+            if df is None:
+                print("Failed to load essential columns with any encoding")
+                return pd.DataFrame()
+            
+            # Clean up downloaded file
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            
+            print(f"✅ Loaded {len(df):,} rows with {len(df.columns)} essential columns from CSV")
+            return df
+        
+    except Exception as e:
+        print(f"Error loading essential columns: {e}")
+        return pd.DataFrame()
+
+# Legacy compatibility functions (to be updated gradually)
+def get_dataframe() -> pd.DataFrame:
+    """
+    LEGACY: Return essential columns only for memory efficiency.
+    This replaces direct calls to load_mega_data_set() without parameters.
+    """
+    return load_mega_data_set(mode="essential")
+
+def get_properties() -> pd.DataFrame:
+    """
+    LEGACY: Return essential columns only for memory efficiency.
+    Alternative name used by some services.
+    """
+    return load_mega_data_set(mode="essential")

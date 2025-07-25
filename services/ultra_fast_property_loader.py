@@ -149,7 +149,7 @@ class UltraFastPropertyLoader:
             
             # Step 2: Load and process mega_data_set with extreme optimization
             from services.mega_data_set_loader import load_mega_data_set
-            mega_df = load_mega_data_set()
+            mega_df = load_mega_data_set(mode="essential")
             
             if mega_df.empty:
                 print("❌ No mega_data_set available")

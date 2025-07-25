@@ -2,6 +2,54 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🔄 USER STORY WORKFLOW - MANDATORY PROCESS
+
+**CRITICAL: This workflow MUST be followed for ALL code changes and feature requests.**
+
+### 1. Story Definition Phase
+When a user requests code changes or new features, ALWAYS:
+
+1. **Read USER_STORIES.md first** to understand previously solved problems and prevent regression
+2. **Create a story plan** with:
+   - Name of the user story
+   - What is the problem
+   - Why is the problem important
+3. **Ask clarifying questions** if the story isn't clear
+4. **Confirm the story** with the user before proceeding
+
+### 2. Planning Phase
+Once the story is confirmed:
+
+1. **Create a detailed plan** with:
+   - List of tasks to accomplish
+   - Tests needed to verify completion
+2. **Confirm the plan** with the user before starting development
+
+### 3. Development Phase
+During development:
+
+1. **Monitor for scope creep** - if the user deviates from the original story, warn them and confirm if it's intentional
+2. **Reference previous stories** to ensure no regression of solved problems
+3. **Focus on completing the agreed story** without deviation
+
+### 4. Completion Phase
+When the story is complete:
+
+1. **Create a completion summary** with:
+   - Story name, problem, and importance
+   - Tasks accomplished
+   - Main problems encountered
+   - Lessons learned
+   - Tests that confirmed completion
+   - Commit message for terminal use
+2. **Update USER_STORIES.md** with the new story entry
+3. **Assign sequential story number**
+
+### 5. Regression Prevention
+- **ALWAYS review USER_STORIES.md** before starting any new story
+- **Cross-reference** current changes against previously solved problems
+- **Ensure** new code doesn't reintroduce old issues
+
 ## Common Commands
 
 This is a Python Streamlit application. Use these commands:
