@@ -219,14 +219,8 @@ class ConversationSyncManager:
                 print(f"🔍 **Worker Request Debug:** Trying {worker_url}")
                 print(f"Payload: {payload}")
 
-                # Add JavaScript console logging for production debugging
-                st.markdown(f"""
-                <script>
-                console.log('🔍 SYNC API CALL - Trying Worker URL: {worker_url}');
-                console.log('🔍 SYNC API CALL - Request Payload:', {payload});
-                console.log('🔍 SYNC API CALL - Starting request at:', new Date().toISOString());
-                </script>
-                """, unsafe_allow_html=True)
+                # Skip JavaScript logging in background thread (no ScriptRunContext)
+                # st.markdown would cause "missing ScriptRunContext" error
 
                 # Retry logic for each endpoint
                 max_retries = 3
@@ -362,17 +356,7 @@ class ConversationSyncManager:
             print(f"Response Headers: {dict(response.headers)}")
             print(f"Response Text (first 200 chars): {response.text[:200]}")
             
-            # Add JavaScript console logging for response
-            response_text_safe = response.text.replace('"', '\\"').replace('\n', '\\n')[:200]
-            st.markdown(f"""
-            <script>
-            console.log('🔍 SYNC API RESPONSE - Success with URL: {successful_url}');
-            console.log('🔍 SYNC API RESPONSE - Status Code: {response.status_code}');
-            console.log('🔍 SYNC API RESPONSE - Headers:', {dict(response.headers)});
-            console.log('🔍 SYNC API RESPONSE - Body (first 200 chars): "{response_text_safe}");
-            console.log('🔍 SYNC API RESPONSE - Response received at:', new Date().toISOString());
-            </script>
-            """, unsafe_allow_html=True)
+            # Skip JavaScript logging in background thread (no ScriptRunContext)
 
             # Parse worker response
             try:
@@ -422,14 +406,7 @@ class ConversationSyncManager:
                 
                 print(f"🔍 **Worker Messages:** Found {len(messages)} messages")
                 
-                # Console log the successful parsing
-                st.markdown(f"""
-                <script>
-                console.log('🔍 SYNC SUCCESS - Messages extracted:', {len(messages)});
-                console.log('🔍 SYNC SUCCESS - Total fetched:', {total_fetched});
-                console.log('🔍 SYNC SUCCESS - Worker data keys:', {list(worker_data.keys())});
-                </script>
-                """, unsafe_allow_html=True)
+                # Skip JavaScript logging in background thread (no ScriptRunContext)
                 
             except Exception as parse_error:
                 print(f"🔍 **Worker JSON Parse Error:** {parse_error}")
@@ -446,13 +423,7 @@ class ConversationSyncManager:
             added = self._add_messages_to_database(messages, conversation_id)
             print(f"🔍 **Database Update:** {added} new messages added to DB")
             
-            # Console log database operations
-            st.markdown(f"""
-            <script>
-            console.log('🔍 DATABASE UPDATE - Messages added to DB:', {added});
-            console.log('🔍 DATABASE UPDATE - Conversation ID:', '{conversation_id}');
-            </script>
-            """, unsafe_allow_html=True)
+            # Skip JavaScript logging in background thread (no ScriptRunContext)
 
             # Update conversation metadata
             self._update_conversation_metadata(conversation_id)
