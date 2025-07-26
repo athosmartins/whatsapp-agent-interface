@@ -11,6 +11,17 @@ import psutil  # For memory monitoring
 import logging
 from pathlib import Path
 
+def debug_log(message, category="GENERAL"):
+    """Enhanced debug logging to both terminal and file."""
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    formatted_msg = f"[{timestamp}] {category}: {message}"
+    print(formatted_msg)
+    try:
+        with open("/tmp/mega_data_debug.log", "a") as f:
+            f.write(formatted_msg + "\n")
+    except:
+        pass  # Don't fail if we can't write to file
+
 try:
     from services.mega_data_set_loader import (
         load_mega_data_set,
@@ -20,8 +31,24 @@ try:
         list_bairros_optimized,
         load_bairros_optimized,
     )
+    from services.lazy_column_loader import (
+        get_column_metadata,
+        get_column_values,
+        get_bairros_list,
+        clear_lazy_cache
+    )
+    from services.smart_filter_cascade import (
+        should_reload_filter,
+        get_filters_to_reload,
+        load_filter_values_smart,
+        mark_filter_changed,
+        mark_bairros_changed,
+        get_cascade_cache_stats,
+        clear_cascade_cache
+    )
     from utils.property_map import render_property_map_streamlit
     from services.hex_api import render_hex_dropdown_interface
+    from services.performance_monitor import render_performance_sidebar, log_data_operation, performance_monitor
 except ImportError as e:
     st.error(f"❌ Error importing modules: {e}")
     st.info(
@@ -35,6 +62,22 @@ st.title("🏢 Mega Data Set")
 
 # Debug mode check
 DEBUG = st.sidebar.checkbox("Debug Mode", value=False)
+
+# Performance monitoring sidebar
+if DEBUG:
+    st.sidebar.markdown("### 📊 Performance Stats")
+    cache_stats = get_cascade_cache_stats()
+    st.sidebar.write(f"**Filter Cache Entries**: {cache_stats['cached_entries']}")
+    st.sidebar.write(f"**Cache Size**: {cache_stats['cache_size_mb']:.2f} MB")
+    
+    if st.sidebar.button("Clear All Caches"):
+        clear_lazy_cache()
+        clear_cascade_cache()
+        st.sidebar.success("✅ Caches cleared!")
+        st.rerun()
+    
+    # Performance monitoring
+    render_performance_sidebar()
 
 # Production environment detection
 IS_PRODUCTION = os.getenv("STREAMLIT_SERVER_HEADLESS") == "true"
@@ -144,6 +187,7 @@ if "mega_data_filter_state" not in st.session_state:
     st.session_state.mega_data_filter_state = {
         "bairro_filter": [],
         "map_loaded": False,
+        "auto_map_loading": False,  # Track if auto-map loading is enabled
         "dynamic_filters": [],  # List of dynamic filter configurations
         "filters_need_update": False,  # Track if filters changed and need map update
         "filter_groups": [  # Groups of filters with AND/OR logic
@@ -156,6 +200,8 @@ if "mega_data_filter_state" not in st.session_state:
         ],
         "global_group_logic": "AND",  # Logic between groups
         "rerun_count": 0,  # Track reruns to prevent infinite loops
+        "last_bairros": [],  # Track last selected bairros for change detection
+        "filter_reload_flags": set(),  # Track which filters need reloading
     }
 
 # Add rerun protection
@@ -391,19 +437,36 @@ def get_cascaded_dataframe(bairro_filter, dynamic_filters, base_df, bairro_col):
 #     pass
 
 
-def render_dynamic_filters(df):
-    """Render the simple dynamic filter interface with cascading options."""
+def render_dynamic_filters_optimized():
+    """Render the ultra-fast dynamic filter interface with smart cascading."""
+    debug_log("Starting render_dynamic_filters_optimized", "FILTER_RENDER")
+    
     # Set default filter logic to AND (no UI selector)
     st.session_state.mega_data_filter_state["filter_logic"] = "AND"
 
     # Get current bairro filter state
     bairro_filter = st.session_state.mega_data_filter_state.get("bairro_filter", [])
-
+    debug_log(f"Current bairro_filter: {bairro_filter}", "FILTER_RENDER")
+    
+    # Use lazy loading to get only column metadata (ultra-fast)
+    column_metadata = get_column_metadata()
+    debug_log(f"Column metadata loaded: {len(column_metadata)} columns", "FILTER_RENDER")
+    if not column_metadata:
+        st.warning("⚠️ Não foi possível carregar metadados das colunas")
+        return []
+    
     # Get available columns (exclude geometry and other technical columns) - sorted alphabetically
     excluded_columns = {"GEOMETRY", "geometry", "id", "ID", "_id", "index"}
     available_columns = sorted(
-        [col for col in df.columns if col not in excluded_columns]
+        [col for col in column_metadata.keys() if col not in excluded_columns]
     )
+    
+    # Check for bairro changes to trigger cascade
+    last_bairros = st.session_state.mega_data_filter_state.get("last_bairros", [])
+    bairros_changed = set(bairro_filter) != set(last_bairros)
+    if bairros_changed:
+        mark_bairros_changed(st.session_state.mega_data_filter_state["dynamic_filters"])
+        st.session_state.mega_data_filter_state["last_bairros"] = bairro_filter.copy()
 
     # Render existing filters
     filters_to_remove = []
@@ -430,8 +493,23 @@ def render_dynamic_filters(df):
             with col2:
                 # Operator selection based on column type
                 if selected_column:
-                    col_info = get_column_dtype_info(df, selected_column)
-                    operators = col_info["suggested_operators"]
+                    # Get column type from metadata for operator suggestions
+                    col_dtype = column_metadata.get(selected_column, 'object')
+                    
+                    # Determine operators based on column type
+                    if 'int' in col_dtype.lower() or 'float' in col_dtype.lower():
+                        operators = ["equals", "greater_than", "less_than", "between", "is_one_of", "is_not_one_of"]
+                        is_categorical = False
+                    elif 'date' in col_dtype.lower() or 'time' in col_dtype.lower():
+                        operators = ["equals", "after", "before", "between", "is_one_of", "is_not_one_of"]
+                        is_categorical = False
+                    else:
+                        # String/object - assume categorical for common fields
+                        is_categorical = any(term in selected_column.upper() for term in ['NOME', 'TIPO', 'ZONA', 'BAIRRO'])
+                        if is_categorical:
+                            operators = ["is_one_of", "is_not_one_of", "equals", "contains", "starts_with", "ends_with"]
+                        else:
+                            operators = ["contains", "starts_with", "ends_with", "equals", "is_one_of", "is_not_one_of"]
                     operator_labels = {
                         "equals": "Igual a",
                         "contains": "Contém",
@@ -453,9 +531,8 @@ def render_dynamic_filters(df):
 
                     # Check if should default to "is_one_of"
                     should_default_to_is_one_of = (
-                        col_info["is_categorical"]  # Categories with < 50 unique values
-                        or "NOME"
-                        in selected_column.upper()  # Name fields like "nome Logradouro"
+                        is_categorical  # Categorical fields
+                        or "NOME" in selected_column.upper()  # Name fields like "nome Logradouro"
                         or "TIPO" in selected_column.upper()  # Type fields
                         or "ZONA" in selected_column.upper()  # Zone fields
                     )
@@ -485,22 +562,12 @@ def render_dynamic_filters(df):
             with col3:
                 # Value input based on operator and column type
                 if selected_column and filter_config["operator"]:
-                    # Get cascaded dataframe EXCLUDING current filter for options
-                    other_filters = [
-                        f
-                        for j, f in enumerate(
-                            st.session_state.mega_data_filter_state["dynamic_filters"]
-                        )
-                        if j != i
-                    ]
-                    cascaded_df = get_cascaded_dataframe(
-                        bairro_filter,
-                        other_filters,
-                        df,
-                        next(col for col in df.columns if "BAIRRO" in col.upper()),
-                    )
-
-                    col_info = get_column_dtype_info(cascaded_df, selected_column)
+                    # Get column type info for value input
+                    col_dtype = column_metadata.get(selected_column, 'object')
+                    is_numeric = 'int' in col_dtype.lower() or 'float' in col_dtype.lower()
+                    is_datetime = 'date' in col_dtype.lower() or 'time' in col_dtype.lower()
+                    is_categorical = any(term in selected_column.upper() for term in ['NOME', 'TIPO', 'ZONA', 'BAIRRO'])
+                    
                     operator = filter_config["operator"]
 
                     if operator == "between":
@@ -514,7 +581,7 @@ def render_dynamic_filters(df):
                             current_range = [None, None]
 
                         with col3a:
-                            if col_info["is_numeric"]:
+                            if is_numeric:
                                 min_val = st.number_input(
                                     "Min:",
                                     value=(
@@ -535,7 +602,7 @@ def render_dynamic_filters(df):
                                     key=f"filter_min_{i}_{selected_column}_{operator}",
                                 )
                         with col3b:
-                            if col_info["is_numeric"]:
+                            if is_numeric:
                                 max_val = st.number_input(
                                     "Max:",
                                     value=(
@@ -558,13 +625,28 @@ def render_dynamic_filters(df):
                         filter_config["value"] = [min_val, max_val]
 
                     elif operator in ["is_one_of", "is_not_one_of"]:
-                        # Multi-select for "is one of" and "is not one of" - use cascaded options
-                        if col_info["is_categorical"]:
-                            # Get unique values from cascaded dataframe
-                            unique_values = (
-                                cascaded_df[selected_column].dropna().unique()
-                            )
-                            unique_values = sorted([str(v) for v in unique_values])
+                        # Multi-select for "is one of" and "is not one of" - use smart lazy loading
+                        if is_categorical or operator in ["is_one_of", "is_not_one_of"]:
+                            # Check if this filter needs reloading based on cascade rules
+                            current_filters = st.session_state.mega_data_filter_state["dynamic_filters"]
+                            needs_reload = i in st.session_state.mega_data_filter_state.get("filter_reload_flags", set())
+                            
+                            # Use smart cascade loading for values
+                            try:
+                                unique_values = load_filter_values_smart(
+                                    filter_index=i,
+                                    column_name=selected_column,
+                                    filter_configs=current_filters,
+                                    selected_bairros=bairro_filter,
+                                    force_reload=needs_reload
+                                )
+                            except Exception as e:
+                                st.error(f"Erro ao carregar valores para {selected_column}: {e}")
+                                unique_values = []
+                            
+                            # Clear reload flag after loading
+                            if needs_reload and "filter_reload_flags" in st.session_state.mega_data_filter_state:
+                                st.session_state.mega_data_filter_state["filter_reload_flags"].discard(i)
 
                             # Get current selections, filtering out invalid ones
                             current_selections = filter_config.get("value", [])
@@ -576,6 +658,10 @@ def render_dynamic_filters(df):
                                 v for v in current_selections if v in unique_values
                             ]
 
+                            # Show loading indicator if no values yet
+                            if not unique_values:
+                                st.info(f"Carregando valores para {selected_column}...")
+
                             # Use a stable key that doesn't change based on operator
                             stable_key = f"filter_multiselect_{i}_{selected_column}"
                             selected_values = st.multiselect(
@@ -584,7 +670,24 @@ def render_dynamic_filters(df):
                                 default=valid_selections,
                                 key=stable_key,
                             )
+                            
+                            # Detect if filter value changed and trigger cascade
+                            old_value = filter_config.get("value", [])
+                            debug_log(f"Filter {i} - Old: {old_value}, New: {selected_values}", "FILTER_VALUE")
+                            if set(selected_values) != set(old_value):
+                                debug_log(f"Filter {i} value changed! Triggering cascade...", "FILTER_CHANGE")
+                                # Filter value changed - trigger cascade for dependent filters
+                                current_filters = st.session_state.mega_data_filter_state["dynamic_filters"]
+                                filters_to_reload = get_filters_to_reload(i, current_filters)
+                                if "filter_reload_flags" not in st.session_state.mega_data_filter_state:
+                                    st.session_state.mega_data_filter_state["filter_reload_flags"] = set()
+                                st.session_state.mega_data_filter_state["filter_reload_flags"].update(filters_to_reload)
+                                debug_log(f"Filter {i} changed → Reload filters: {filters_to_reload}", "CASCADE")
+                            else:
+                                debug_log(f"Filter {i} value unchanged", "FILTER_NO_CHANGE")
+                            
                             filter_config["value"] = selected_values
+                            debug_log(f"Filter {i} value set to: {selected_values}", "FILTER_SET")
                         else:
                             # Text input for manual entry
                             current_value = filter_config.get("value", [])
@@ -600,14 +703,25 @@ def render_dynamic_filters(df):
                                 value=current_text,
                                 key=stable_key,
                             )
-                            filter_config["value"] = [
-                                v.strip() for v in values_text.split(",") if v.strip()
-                            ]
+                            
+                            # Detect if filter value changed and trigger cascade
+                            old_value = filter_config.get("value", [])
+                            new_value = [v.strip() for v in values_text.split(",") if v.strip()]
+                            if set(new_value) != set(old_value):
+                                # Filter value changed - trigger cascade for dependent filters
+                                current_filters = st.session_state.mega_data_filter_state["dynamic_filters"]
+                                filters_to_reload = get_filters_to_reload(i, current_filters)
+                                if "filter_reload_flags" not in st.session_state.mega_data_filter_state:
+                                    st.session_state.mega_data_filter_state["filter_reload_flags"] = set()
+                                st.session_state.mega_data_filter_state["filter_reload_flags"].update(filters_to_reload)
+                                print(f"🔄 Filter {i} text value changed, triggering reload for filters: {filters_to_reload}")
+                            
+                            filter_config["value"] = new_value
 
                     else:
                         # Single value input
                         current_value = filter_config.get("value", "")
-                        if col_info["is_numeric"]:
+                        if is_numeric:
                             filter_config["value"] = st.number_input(
                                 "Valor:",
                                 value=(
@@ -621,7 +735,7 @@ def render_dynamic_filters(df):
                                 ),
                                 key=f"filter_number_{i}_{selected_column}_{operator}",
                             )
-                        elif col_info["is_datetime"]:
+                        elif is_datetime:
                             filter_config["value"] = st.date_input(
                                 "Data:",
                                 key=f"filter_date_{i}_{selected_column}_{operator}",
@@ -639,6 +753,12 @@ def render_dynamic_filters(df):
                 # Remove filter button
                 if st.button("❌", key=f"remove_filter_{i}", help="Remover filtro"):
                     filters_to_remove.append(i)
+                    # Mark dependent filters for reload when this filter is removed
+                    current_filters = st.session_state.mega_data_filter_state["dynamic_filters"]
+                    filters_to_reload = get_filters_to_reload(i, current_filters)
+                    if "filter_reload_flags" not in st.session_state.mega_data_filter_state:
+                        st.session_state.mega_data_filter_state["filter_reload_flags"] = set()
+                    st.session_state.mega_data_filter_state["filter_reload_flags"].update(filters_to_reload)
 
     # Remove filters marked for removal
     for i in sorted(filters_to_remove, reverse=True):
@@ -691,11 +811,17 @@ def render_dynamic_filters(df):
         if st.button("🔄 Atualizar e Carregar Mapa"):
             st.session_state.mega_data_filter_state["filters_need_update"] = True
             st.session_state.mega_data_filter_state["map_loaded"] = True
+            st.session_state.mega_data_filter_state["auto_map_loading"] = True  # Enable auto-loading
             st.rerun()
 
         st.markdown("</div>", unsafe_allow_html=True)
 
     return st.session_state.mega_data_filter_state["dynamic_filters"]
+
+
+def render_dynamic_filters(df):
+    """Legacy wrapper function for compatibility."""
+    return render_dynamic_filters_optimized()
 
 
 # load_mega_data() function removed - now using optimized bairro-based loading
@@ -712,7 +838,8 @@ mega_df = None
 try:
     monitor_memory_usage("before_bairros_loading")
     with st.spinner("Carregando lista de bairros..."):
-        available_bairros = list_bairros_optimized()
+        # Use ultra-efficient lazy loader for bairros
+        available_bairros = get_bairros_list()
     monitor_memory_usage("after_bairros_loading")
     
     if available_bairros:
@@ -766,6 +893,12 @@ if load_data_btn and selected_bairros:
         with st.spinner(f"Carregando dados para {len(selected_bairros)} bairro(s)..."):
             mega_df = load_bairros_optimized(selected_bairros)
             monitor_memory_usage("after_bairro_data_load")
+
+        # CRITICAL FIX: Handle None return from load_bairros_optimized
+        if mega_df is None:
+            st.error("❌ Erro crítico ao carregar dados dos bairros.")
+            st.info("Tente recarregar a página ou selecionar outros bairros.")
+            st.stop()
 
         if mega_df.empty:
             st.error("❌ Nenhum dado encontrado para os bairros selecionados.")
@@ -834,20 +967,20 @@ with col1:
     # Use selected bairros from earlier step (no duplicate selector)
     selected_bairros = st.session_state.mega_data_filter_state.get("bairro_filter", [])
     
-    # Ensure default "Nome Logradouro" filter is added automatically
+    # Auto-setup default filters when bairro is selected for the first time
     if selected_bairros and len(st.session_state.mega_data_filter_state.get("dynamic_filters", [])) == 0:
-        # Add default Nome Logradouro filter
-        nome_logradouro_filter = {
-            "column": "NOME LOGRADOURO",
-            "operator": "is_one_of",
-            "value": [],
-            "enabled": True
-        }
-        st.session_state.mega_data_filter_state["dynamic_filters"] = [nome_logradouro_filter]
+        # Add 3 default filters as requested:
+        # 1. TIPO CONSTRUTIVO, 2. NOME LOGRADOURO, 3. ENDERECO
+        default_filters = [
+            {"column": "TIPO CONSTRUTIVO", "operator": "is_one_of", "value": []},
+            {"column": "NOME LOGRADOURO", "operator": "is_one_of", "value": []},
+            {"column": "ENDERECO", "operator": "is_one_of", "value": []}
+        ]
+        st.session_state.mega_data_filter_state["dynamic_filters"] = default_filters
         st.rerun()
 
-    # Dynamic filters with reorganized buttons
-    dynamic_filters = render_dynamic_filters(mega_df)
+    # Dynamic filters with ultra-fast lazy loading
+    dynamic_filters = render_dynamic_filters_optimized()
 
     # Apply filters - Only when map update is requested or on initial load
     # Always calculate current filters for cascading (but don't apply to final results unless button pressed)
@@ -894,6 +1027,13 @@ with col1:
         or st.session_state.mega_data_filter_state.get("filters_need_update", False)
     ):
 
+        debug_log("Storing new filtered data for map:", "MAP_DATA")
+        debug_log(f"- Selected bairros: {selected_bairros}", "MAP_DATA")
+        debug_log(f"- Active dynamic filters: {len(active_dynamic_filters)}", "MAP_DATA")
+        for i, f in enumerate(active_dynamic_filters):
+            debug_log(f"  Filter {i}: {f.get('column')} {f.get('operator')} {f.get('value')}", "MAP_DATA")
+        debug_log(f"- Filtered records: {len(current_filtered_df)}", "MAP_DATA")
+        
         st.session_state.mega_data_filter_state["last_applied_filters"] = {
             "bairro_filter": selected_bairros.copy(),
             "dynamic_filters": [f.copy() for f in active_dynamic_filters],
@@ -901,14 +1041,59 @@ with col1:
         }
         st.session_state.mega_data_filter_state["filters_need_update"] = False
         filtered_df = current_filtered_df.copy()
+        debug_log("New data stored in session state for map rendering", "MAP_DATA")
     else:
         # Use the last applied state for map and results
         last_applied = st.session_state.mega_data_filter_state.get(
             "last_applied_filters", {}
         )
         filtered_df = last_applied.get("filtered_df", mega_df.copy())
-        # Update active_dynamic_filters to show count correctly
-        active_dynamic_filters = last_applied.get("dynamic_filters", [])
+        applied_bairros = last_applied.get("bairro_filter", [])
+        applied_filters = last_applied.get("dynamic_filters", [])
+        
+        print(f"\n🗺️ [MAP_DATA] Using cached data for map:")
+        print(f"🗺️ [MAP_DATA] - Applied bairros: {applied_bairros}")
+        print(f"🗺️ [MAP_DATA] - Applied dynamic filters: {len(applied_filters)}")
+        for i, f in enumerate(applied_filters):
+            print(f"🗺️ [MAP_DATA]   Filter {i}: {f.get('column')} {f.get('operator')} {f.get('value')}")
+        print(f"🗺️ [MAP_DATA] - Cached records: {len(filtered_df)}")
+        
+        # CRITICAL FIX: Compare UI filter state with cached backend state (not just counts)
+        current_dynamic_filters = st.session_state.mega_data_filter_state.get("dynamic_filters", [])
+        current_bairro_filter = st.session_state.mega_data_filter_state.get("bairro_filter", [])
+        
+        # Count active filters in UI vs backend
+        current_active_count = len([f for f in current_dynamic_filters if is_filter_active(f)])
+        cached_active_count = len(applied_filters)
+        
+        # Check if filter VALUES differ (not just counts)
+        filters_values_differ = False
+        if current_active_count == cached_active_count and current_active_count > 0:
+            # Same number of filters - check if values differ
+            for i, current_filter in enumerate(current_dynamic_filters):
+                if is_filter_active(current_filter) and i < len(applied_filters):
+                    current_value = current_filter.get("value", [])
+                    cached_value = applied_filters[i].get("value", [])
+                    
+                    # Normalize values for comparison
+                    if isinstance(current_value, list) and isinstance(cached_value, list):
+                        if set(current_value) != set(cached_value):
+                            filters_values_differ = True
+                            debug_log(f"Filter {i} values differ - UI: {current_value}, Cache: {cached_value}", "SYNC_FIX")
+                            break
+        
+        # Force update if filter counts differ OR values differ
+        if current_active_count != cached_active_count or filters_values_differ:
+            if current_active_count != cached_active_count:
+                debug_log(f"Filter counts differ - UI: {current_active_count}, Backend: {cached_active_count} - forcing update", "SYNC_FIX")
+            else:
+                debug_log(f"Filter values differ - forcing update to sync new values", "SYNC_FIX")
+            st.session_state.mega_data_filter_state["filters_need_update"] = True
+            # FIXED: Use warning instead of immediate rerun to avoid concurrent loads
+            st.warning("⚠️ Filtros foram alterados. Clique em 'Atualizar e Carregar Mapa' para aplicar as mudanças.")
+            # st.rerun()  # Commented out to prevent concurrent loads
+        else:
+            debug_log(f"Using cached data - UI: {current_active_count}, Backend: {cached_active_count}", "SYNC_FIX")
 
     # Show filtered results count and update status
     last_applied = st.session_state.mega_data_filter_state.get(
@@ -942,15 +1127,24 @@ with col1:
     else:
         st.info(f"🏠 **{current_count:,} propriedades disponíveis**")
 
-    # Show update status if there are pending changes
+    # Show update status if there are pending changes (unless auto-loading is enabled)
+    auto_loading = st.session_state.mega_data_filter_state.get("auto_map_loading", False)
+    
     if (
         current_total_filters != total_applied_filters
         or selected_bairros != applied_bairros
         or len(active_dynamic_filters) != len(applied_dynamic_filters)
     ):
-        st.write(
-            "⚠️ Há mudanças nos filtros. Clique em 'Atualizar e Carregar Mapa' para aplicar as alterações."
-        )
+        if auto_loading:
+            # Auto-trigger map update
+            st.session_state.mega_data_filter_state["filters_need_update"] = True
+            st.session_state.mega_data_filter_state["map_loaded"] = True
+            st.info("🔄 Filtros alterados - atualizando mapa automaticamente...")
+            st.rerun()
+        else:
+            st.write(
+                "⚠️ Há mudanças nos filtros. Clique em 'Atualizar e Carregar Mapa' para aplicar as alterações."
+            )
 
     # Hex API Integration Section
     if total_applied_filters > 0 and len(filtered_df) > 0:
@@ -1052,7 +1246,17 @@ with col1:
 
                 # Render the map (this is where the actual time is spent)
                 monitor_memory_usage("before_map_rendering")
-                print(f"Starting map rendering with {len(valid_properties)} properties")
+                print(f"\n🗺️ [MAP_RENDER] Starting map rendering with {len(valid_properties)} properties")
+                
+                # Log sample of data being sent to map
+                if len(valid_properties) > 0:
+                    sample_property = valid_properties[0]
+                    print(f"🗺️ [MAP_RENDER] Sample property: {sample_property.get('ENDERECO', 'N/A')} - {sample_property.get('TIPO CONSTRUTIVO', 'N/A')}")
+                    
+                    # Check what TIPO CONSTRUTIVO values are in the data
+                    tipo_values = [p.get('TIPO CONSTRUTIVO') for p in valid_properties[:10]]
+                    unique_tipos = list(set(tipo_values))
+                    print(f"🗺️ [MAP_RENDER] TIPO CONSTRUTIVO values in first 10 properties: {unique_tipos}")
                 
                 try:
                     render_property_map_streamlit(

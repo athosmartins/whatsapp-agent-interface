@@ -877,9 +877,10 @@ def list_bairros_optimized():
                 bairros_df = duckdb.query(query).df()
                 bairros = bairros_df['BAIRRO'].tolist()
                 
-                # Clean up downloaded file
-                if os.path.exists(file_path):
-                    os.remove(file_path)
+                # FIXED: Don't delete file immediately - let system handle cleanup
+                # File may be needed by concurrent requests
+                # if os.path.exists(file_path):
+                #     os.remove(file_path)
                 
                 print(f"Loaded {len(bairros)} bairros from Parquet file")
                 return bairros
@@ -981,9 +982,10 @@ def load_bairros_optimized(bairros: list):
                 query = f"SELECT * FROM '{file_path}' WHERE BAIRRO IN ('{bairros_str}')"
                 df = duckdb.query(query).df()
                 
-                # Clean up downloaded file
-                if os.path.exists(file_path):
-                    os.remove(file_path)
+                # FIXED: Don't delete file immediately - let system handle cleanup
+                # File may be needed by concurrent requests
+                # if os.path.exists(file_path):
+                #     os.remove(file_path)
                 
                 print(f"Loaded {len(df):,} rows for bairros from Parquet file: {', '.join(bairros)}")
                 return df
@@ -1056,7 +1058,20 @@ def load_bairros_optimized(bairros: list):
     except Exception as e:
         print(f"Error in load_bairros_optimized: {e}")
         print("Falling back to sample data...")
-        return _get_sample_data(bairros)
+        try:
+            return _get_sample_data(bairros)
+        except Exception as e2:
+            print(f"Error creating sample data: {e2}")
+            # Return empty DataFrame as absolute fallback
+            return pd.DataFrame({
+                'BAIRRO': [],
+                'ENDERECO': [],
+                'INDICE_CADASTRAL': [],
+                'GEOMETRY': [],
+                'AREA_CONSTRUCAO': [],
+                'AREA_TERRENO': [],
+                'TIPO_CONSTRUTIVO': []
+            })
 
 def _get_sample_data(bairros: list):
     """Get sample data for selected bairros."""
@@ -1204,9 +1219,10 @@ def _load_essential_columns_only() -> pd.DataFrame:
                 # Load only essential columns using pandas column selection
                 df = pd.read_parquet(file_path, columns=ESSENTIAL_COLUMNS)
                 
-                # Clean up downloaded file
-                if os.path.exists(file_path):
-                    os.remove(file_path)
+                # FIXED: Don't delete file immediately - let system handle cleanup
+                # File may be needed by concurrent requests
+                # if os.path.exists(file_path):
+                #     os.remove(file_path)
                 
                 print(f"✅ Loaded {len(df):,} rows with {len(df.columns)} essential columns (memory optimized)")
                 return df

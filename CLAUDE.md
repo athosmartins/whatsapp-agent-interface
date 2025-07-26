@@ -32,18 +32,35 @@ During development:
 2. **Reference previous stories** to ensure no regression of solved problems
 3. **Focus on completing the agreed story** without deviation
 
-### 4. Completion Phase
-When the story is complete:
+### 4. Testing & Verification Phase (MANDATORY)
+**BEFORE claiming story completion, ALWAYS perform comprehensive testing:**
 
-1. **Create a completion summary** with:
+1. **Playwright Testing**: Test all functionality with browser automation
+2. **Debug Log Monitoring**: Monitor `/tmp/mega_data_debug.log` for:
+   - Data flow verification
+   - Session state consistency 
+   - Expensive operation detection
+   - Filter synchronization validation
+3. **Performance Analysis**: Verify no regressions or unnecessary operations
+4. **Fix Issues Found**: Address any problems discovered during testing
+5. **Only proceed to completion after thorough testing confirms expected behavior**
+
+### 5. Completion Phase
+When testing confirms the story works correctly:
+
+1. **WAIT FOR USER TESTING AND APPROVAL** - Do NOT mark story as complete until:
+   - User has thoroughly tested the implementation
+   - User has confirmed all requirements are met
+   - User has explicitly approved the story completion
+2. **ONLY AFTER USER APPROVAL, create a completion summary** with:
    - Story name, problem, and importance
    - Tasks accomplished
    - Main problems encountered
    - Lessons learned
    - Tests that confirmed completion
    - Commit message for terminal use
-2. **Update USER_STORIES.md** with the new story entry
-3. **Assign sequential story number**
+3. **Update USER_STORIES.md** with the new story entry
+4. **Assign sequential story number**
 
 ### 5. Regression Prevention
 - **ALWAYS review USER_STORIES.md** before starting any new story
