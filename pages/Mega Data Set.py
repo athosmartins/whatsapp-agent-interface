@@ -74,7 +74,7 @@ if DEBUG:
         clear_lazy_cache()
         clear_cascade_cache()
         st.sidebar.success("✅ Caches cleared!")
-        st.rerun()
+        safe_rerun("cache_clear")
     
     # Performance monitoring
     render_performance_sidebar()
@@ -202,6 +202,9 @@ if "mega_data_filter_state" not in st.session_state:
         "rerun_count": 0,  # Track reruns to prevent infinite loops
         "last_bairros": [],  # Track last selected bairros for change detection
         "filter_reload_flags": set(),  # Track which filters need reloading
+        "loaded_data": None,  # Cache loaded data in session state
+        "loaded_bairros": [],  # Track which bairros are currently loaded
+        "map_render_fingerprint": None,  # Track what data the map was rendered with
     }
 
 # Add rerun protection
@@ -212,6 +215,71 @@ if "rerun_count" not in st.session_state.mega_data_filter_state:
 if st.session_state.mega_data_filter_state["rerun_count"] > 10:
     st.session_state.mega_data_filter_state["rerun_count"] = 0
 
+def safe_rerun(context="unknown"):
+    """Safely execute st.rerun() with protection against infinite loops."""
+    current_count = st.session_state.mega_data_filter_state.get("rerun_count", 0)
+    
+    # Prevent infinite loops by limiting reruns
+    if current_count >= 5:
+        debug_log(f"RERUN PROTECTION: Blocked rerun from {context} (count: {current_count})", "RERUN_PROTECTION")
+        st.warning("⚠️ Muitas atualizações detectadas. Recarregue a página se necessário.")
+        return False
+    
+    # Increment counter and execute rerun
+    st.session_state.mega_data_filter_state["rerun_count"] = current_count + 1
+    debug_log(f"RERUN PROTECTION: Executing rerun from {context} (count: {current_count + 1})", "RERUN_PROTECTION")
+    st.rerun()
+    return True
+
+@st.cache_data(ttl=3600, max_entries=5)
+def cached_load_bairros_data(selected_bairros_tuple):
+    """Cached wrapper for loading bairro data - prevents reloading on every map interaction."""
+    selected_bairros = list(selected_bairros_tuple)  # Convert tuple back to list
+    debug_log(f"CACHE: Loading data for bairros: {selected_bairros}", "DATA_CACHE")
+    return load_bairros_optimized(selected_bairros)
+
+@st.cache_data(ttl=3600, max_entries=10)
+def prepare_properties_for_map(filtered_df_hash, max_properties):
+    """Cache expensive DataFrame to properties conversion."""
+    # This function receives a hash of the filtered dataframe to ensure cache invalidation
+    # The actual dataframe is stored in session state to avoid passing large objects
+    
+    debug_log(f"MAP_CACHE: Preparing {len(st.session_state.mega_data_filter_state.get('current_filtered_df', pd.DataFrame()))} properties for map", "MAP_CACHE")
+    
+    filtered_df = st.session_state.mega_data_filter_state.get('current_filtered_df', pd.DataFrame())
+    if filtered_df.empty:
+        return []
+    
+    display_df = filtered_df
+    if len(display_df) > max_properties:
+        display_df = display_df.head(max_properties)
+    
+    properties_for_map = []
+    for _, row in display_df.iterrows():
+        try:
+            property_dict = row.to_dict()
+        except Exception:
+            continue
+
+        # Ensure GEOMETRY column exists
+        if "GEOMETRY" not in property_dict:
+            # Try to find a geometry column
+            geom_col = None
+            for col in property_dict.keys():
+                if "GEOMETRY" in col.upper() or "GEOM" in col.upper():
+                    geom_col = col
+                    break
+
+            if geom_col:
+                property_dict["GEOMETRY"] = property_dict[geom_col]
+            else:
+                # Skip properties without geometry
+                continue
+
+        properties_for_map.append(property_dict)
+    
+    debug_log(f"MAP_CACHE: Prepared {len(properties_for_map)} properties with valid geometry", "MAP_CACHE")
+    return properties_for_map
 
 def get_column_dtype_info(df, column):
     """Get information about column data type and suggest appropriate operators."""
@@ -765,7 +833,7 @@ def render_dynamic_filters_optimized():
         st.session_state.mega_data_filter_state["dynamic_filters"].pop(i)
 
     if filters_to_remove:
-        st.rerun()
+        safe_rerun("filter_removal")
 
     # Add buttons row: "Adicionar Filtro" and "Atualizar e Carregar Mapa"
     col1, col2 = st.columns([1, 1], gap="small")
@@ -782,7 +850,7 @@ def render_dynamic_filters_optimized():
             st.session_state.mega_data_filter_state["dynamic_filters"].append(
                 new_filter
             )
-            st.rerun()
+            safe_rerun("add_filter")
 
     with col2:
         # Style the "Atualizar e Carregar Mapa" button with light green
@@ -812,7 +880,7 @@ def render_dynamic_filters_optimized():
             st.session_state.mega_data_filter_state["filters_need_update"] = True
             st.session_state.mega_data_filter_state["map_loaded"] = True
             st.session_state.mega_data_filter_state["auto_map_loading"] = True  # Enable auto-loading
-            st.rerun()
+            safe_rerun("map_update_button")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -882,44 +950,60 @@ except Exception as e:
     load_data_btn = False
     selected_bairros = []
 
-# Step 2: Load data only for selected bairros
+# Step 2: Load data only for selected bairros with SMART CACHING
 if load_data_btn and selected_bairros:
-    # Load data with bairro-based optimization
-    try:
-        monitor_memory_usage("before_bairro_data_loading")
-        print(f"Starting bairro-filtered data load at {datetime.now().isoformat()}")
-        print(f"Loading data for bairros: {', '.join(selected_bairros)}")
-        
-        with st.spinner(f"Carregando dados para {len(selected_bairros)} bairro(s)..."):
-            mega_df = load_bairros_optimized(selected_bairros)
-            monitor_memory_usage("after_bairro_data_load")
-
-        # CRITICAL FIX: Handle None return from load_bairros_optimized
-        if mega_df is None:
-            st.error("❌ Erro crítico ao carregar dados dos bairros.")
-            st.info("Tente recarregar a página ou selecionar outros bairros.")
+    # Check if data is already loaded for the same bairros
+    loaded_bairros = st.session_state.mega_data_filter_state.get("loaded_bairros", [])
+    loaded_data = st.session_state.mega_data_filter_state.get("loaded_data", None)
+    
+    # Only reload if bairros changed or no data loaded
+    if set(selected_bairros) != set(loaded_bairros) or loaded_data is None:
+        debug_log(f"CACHE: Data reload needed - Old: {loaded_bairros}, New: {selected_bairros}", "DATA_CACHE")
+        try:
+            monitor_memory_usage("before_bairro_data_loading")
+            
+            # Use cached function (requires tuple for hashability)
+            selected_bairros_tuple = tuple(sorted(selected_bairros))
+            
+            with st.spinner(f"Carregando dados para {len(selected_bairros)} bairro(s)..."):
+                mega_df = cached_load_bairros_data(selected_bairros_tuple)
+                monitor_memory_usage("after_bairro_data_load")
+                
+                # Store in session state for future use
+                st.session_state.mega_data_filter_state["loaded_data"] = mega_df
+                st.session_state.mega_data_filter_state["loaded_bairros"] = selected_bairros.copy()
+                debug_log(f"CACHE: Data cached in session state for {len(selected_bairros)} bairros", "DATA_CACHE")
+        except Exception as e:
+            log_error_with_context(e, "Critical error during bairro data loading")
+            st.error(f"❌ Erro crítico: {e}")
             st.stop()
+    else:
+        # Use cached data from session state
+        mega_df = loaded_data
+        debug_log(f"CACHE: Using cached data from session state ({len(mega_df)} rows)", "DATA_CACHE")
+        monitor_memory_usage("using_cached_data")
 
-        if mega_df.empty:
-            st.error("❌ Nenhum dado encontrado para os bairros selecionados.")
-            st.info("Tente selecionar outros bairros ou verifique se os dados estão disponíveis.")
-            st.stop()
-
-        # Calculate actual memory savings
-        total_data_estimate = len(mega_df) * (len(available_bairros) / len(selected_bairros))
-        memory_savings = (1 - len(selected_bairros) / len(available_bairros)) * 100
-        
-        st.success(f"🎯 Carregados {len(mega_df):,} registros para {len(selected_bairros)} bairro(s)")
-        
-        # Add row cap warning for large datasets
-        if len(mega_df) > 100000:
-            st.warning(f"⚠️ Dataset muito grande ({len(mega_df):,} registros). Considere refinar os filtros antes de continuar para evitar lentidão.")
-            st.info("💡 Dica: Selecione menos bairros ou use filtros dinâmicos para reduzir ainda mais o dataset.")
-        
-    except Exception as e:
-        log_error_with_context(e, "Critical error during bairro data loading")
-        st.error(f"❌ Erro crítico: {e}")
+    # Common validation and display logic for both cached and newly loaded data
+    if mega_df is None:
+        st.error("❌ Erro crítico ao carregar dados dos bairros.")
+        st.info("Tente recarregar a página ou selecionar outros bairros.")
         st.stop()
+
+    if mega_df.empty:
+        st.error("❌ Nenhum dado encontrado para os bairros selecionados.")
+        st.info("Tente selecionar outros bairros ou verifique se os dados estão disponíveis.")
+        st.stop()
+
+    # Calculate actual memory savings
+    total_data_estimate = len(mega_df) * (len(available_bairros) / len(selected_bairros))
+    memory_savings = (1 - len(selected_bairros) / len(available_bairros)) * 100
+    
+    st.success(f"🎯 Carregados {len(mega_df):,} registros para {len(selected_bairros)} bairro(s)")
+    
+    # Add row cap warning for large datasets
+    if len(mega_df) > 100000:
+        st.warning(f"⚠️ Dataset muito grande ({len(mega_df):,} registros). Considere refinar os filtros antes de continuar para evitar lentidão.")
+        st.info("💡 Dica: Selecione menos bairros ou use filtros dinâmicos para reduzir ainda mais o dataset.")
 
 # Only proceed if data is loaded
 if mega_df is None:
@@ -977,7 +1061,7 @@ with col1:
             {"column": "ENDERECO", "operator": "is_one_of", "value": []}
         ]
         st.session_state.mega_data_filter_state["dynamic_filters"] = default_filters
-        st.rerun()
+        safe_rerun("default_filters_setup")
 
     # Dynamic filters with ultra-fast lazy loading
     dynamic_filters = render_dynamic_filters_optimized()
@@ -1041,6 +1125,8 @@ with col1:
         }
         st.session_state.mega_data_filter_state["filters_need_update"] = False
         filtered_df = current_filtered_df.copy()
+        # Store current filtered dataframe for cached map preparation
+        st.session_state.mega_data_filter_state["current_filtered_df"] = filtered_df.copy()
         debug_log("New data stored in session state for map rendering", "MAP_DATA")
     else:
         # Use the last applied state for map and results
@@ -1136,11 +1222,11 @@ with col1:
         or len(active_dynamic_filters) != len(applied_dynamic_filters)
     ):
         if auto_loading:
-            # Auto-trigger map update
+            # Auto-trigger map update with protection
             st.session_state.mega_data_filter_state["filters_need_update"] = True
             st.session_state.mega_data_filter_state["map_loaded"] = True
             st.info("🔄 Filtros alterados - atualizando mapa automaticamente...")
-            st.rerun()
+            safe_rerun("auto_loading_filters")
         else:
             st.write(
                 "⚠️ Há mudanças nos filtros. Clique em 'Atualizar e Carregar Mapa' para aplicar as alterações."
@@ -1162,42 +1248,24 @@ with col1:
         and len(filtered_df) > 0
     ):
 
-        # Prepare data for map (no limit)
-        display_df = filtered_df
-
-        # Convert DataFrame to list of dictionaries for map
-        properties_for_map = []
-        
-        # PRODUCTION: Much stricter limits for Streamlit Cloud
+        # OPTIMIZED: Use cached map preparation to avoid expensive recomputation
         MAX_PROPERTIES = 10000 if os.getenv("STREAMLIT_SERVER_HEADLESS") == "true" else 50000
-        if len(display_df) > MAX_PROPERTIES:
+        
+        # Create a hash of the filtered data to enable caching
+        import hashlib
+        filtered_df_string = f"{len(filtered_df)}_{hash(str(filtered_df.columns.tolist()))}"
+        filtered_df_hash = hashlib.md5(filtered_df_string.encode()).hexdigest()
+        
+        debug_log(f"MAP_CACHE: Using cached preparation with hash {filtered_df_hash[:8]}", "MAP_CACHE")
+        
+        # Store current dataframe for the cached function to access
+        st.session_state.mega_data_filter_state["current_filtered_df"] = filtered_df
+        
+        # Use cached function for expensive DataFrame processing
+        properties_for_map = prepare_properties_for_map(filtered_df_hash, MAX_PROPERTIES)
+        
+        if len(filtered_df) > MAX_PROPERTIES:
             st.warning(f"⚠️ Limitando a {MAX_PROPERTIES:,} propriedades no mapa para evitar problemas de memória")
-            display_df = display_df.head(MAX_PROPERTIES)
-
-        for _, row in display_df.iterrows():
-            try:
-                property_dict = row.to_dict()
-            except Exception as e:
-                if DEBUG:
-                    st.error(f"Error converting row to dict: {e}")
-                continue
-
-            # Ensure GEOMETRY column exists
-            if "GEOMETRY" not in property_dict:
-                # Try to find a geometry column
-                geom_col = None
-                for col in property_dict.keys():
-                    if "GEOMETRY" in col.upper() or "GEOM" in col.upper():
-                        geom_col = col
-                        break
-
-                if geom_col:
-                    property_dict["GEOMETRY"] = property_dict[geom_col]
-                else:
-                    # Skip properties without geometry
-                    continue
-
-            properties_for_map.append(property_dict)
 
         if not properties_for_map:
             st.error("❌ Nenhuma propriedade com dados geográficos encontrada")
@@ -1381,10 +1449,12 @@ try:
         if last_refresh_key not in st.session_state:
             st.session_state[last_refresh_key] = 0
         
-        # Refresh every 3 seconds when operations are running
+        # CRITICAL BUG FIX: Remove automatic rerun to prevent infinite loading loops
+        # The automatic refresh was causing infinite loading when background operations were running
+        # Users can manually refresh if needed - this prevents production crashes
         if current_time - st.session_state[last_refresh_key] > 3.0:
             st.session_state[last_refresh_key] = current_time
-            st.rerun()
+            # st.rerun()  # REMOVED: This was causing infinite loading loops
         
 except Exception as e:
     if DEBUG:
