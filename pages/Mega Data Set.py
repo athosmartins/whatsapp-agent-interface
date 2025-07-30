@@ -236,7 +236,16 @@ def cached_load_bairros_data(selected_bairros_tuple):
     """Cached wrapper for loading bairro data - prevents reloading on every map interaction."""
     selected_bairros = list(selected_bairros_tuple)  # Convert tuple back to list
     debug_log(f"CACHE: Loading data for bairros: {selected_bairros}", "DATA_CACHE")
-    return load_bairros_optimized(selected_bairros)
+    
+    # TEMPORARY: Clear cache to fix LOURDES/SAVASSI bug - force fresh loading
+    import streamlit as st
+    if hasattr(cached_load_bairros_data, 'clear'):
+        cached_load_bairros_data.clear()
+        debug_log(f"CACHE: Cleared cache for fresh loading", "DATA_CACHE")
+    
+    result = load_bairros_optimized(selected_bairros)
+    debug_log(f"CACHE: Loaded {len(result)} rows for {selected_bairros}", "DATA_CACHE")
+    return result
 
 @st.cache_data(ttl=3600, max_entries=10)
 def prepare_properties_for_map(filtered_df_hash, max_properties):
@@ -742,7 +751,10 @@ def render_dynamic_filters_optimized():
                             # Detect if filter value changed and trigger cascade
                             old_value = filter_config.get("value", [])
                             debug_log(f"Filter {i} - Old: {old_value}, New: {selected_values}", "FILTER_VALUE")
-                            if set(selected_values) != set(old_value):
+                            # Handle None values safely
+                            old_set = set(old_value) if old_value is not None else set()
+                            new_set = set(selected_values) if selected_values is not None else set()
+                            if new_set != old_set:
                                 debug_log(f"Filter {i} value changed! Triggering cascade...", "FILTER_CHANGE")
                                 # Filter value changed - trigger cascade for dependent filters
                                 current_filters = st.session_state.mega_data_filter_state["dynamic_filters"]

@@ -1,0 +1,50 @@
+# Pre-commit configuration for regression prevention
+# This file configures automated checks that run before each commit
+# to prevent regressions of previously solved problems.
+
+repos:
+  - repo: local
+    hooks:
+      # Regression Prevention Tests
+      - id: regression-tests
+        name: Regression Prevention Tests
+        entry: python tests/regression_tests.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [commit]
+        
+      # Code Protection Validation
+      - id: code-protection-scan
+        name: Code Protection Scan
+        entry: python tools/code_protection.py scan
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [commit]
+        
+      # Specific Story #001 Protection
+      - id: prevent-select-star-regression
+        name: Prevent SELECT * Regression (Story #001)
+        entry: bash -c 'if grep -r "SELECT \*" --include="*mega_data_set*.py" --include="*bairros*.py" .; then echo "❌ BLOCKED: SELECT * found in data loading code. This causes memory crashes (Story #001 regression). Use essential columns only."; exit 1; fi'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [commit]
+        
+      # Memory Pattern Protection  
+      - id: essential-columns-check
+        name: Essential Columns Protection
+        entry: bash -c 'if ! grep -r "ESSENTIAL_COLUMNS" services/mega_data_set_loader.py >/dev/null 2>&1; then echo "❌ BLOCKED: ESSENTIAL_COLUMNS missing from mega_data_set_loader.py (Story #001 regression)"; exit 1; fi'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [commit]
+        
+      # Story Cross-Reference Check
+      - id: story-impact-check
+        name: Story Impact Analysis
+        entry: python tools/story_impact_checker.py
+        language: system
+        types: [python]
+        stages: [commit]

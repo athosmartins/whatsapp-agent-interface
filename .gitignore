@@ -15,8 +15,12 @@ test.py
 .claude/
 CLAUDE.md
 
-# Temporary analysis files
+# Temporary analysis files (keep tests/ folder - it's permanent infrastructure)
 analysis_temp/
+/tmp/
+*.log
+*_debug.log
+mega_data_debug.log
 
 # Python virtual environment
 .venv/

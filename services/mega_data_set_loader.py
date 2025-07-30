@@ -749,10 +749,16 @@ def get_data_by_bairros(selected_bairros: List[str]) -> pd.DataFrame:
             success = loader.download_file(newest_file['id'], temp_path)
             
             if success:
-                # Use DuckDB to efficiently query only selected bairros
+                # PROTECTED: Story #001 - Use essential columns only (memory optimization)
+                essential_columns = [
+                    'DOCUMENTO PROPRIETARIO', 'BAIRRO', 'ENDERECO', 'INDICE CADASTRAL',
+                    'COMPLEMENTO ENDERECO', 'AREA CONSTRUCAO', 'AREA TERRENO', 'TIPO CONSTRUTIVO',
+                    'ANO CONSTRUCAO', 'NOME LOGRADOURO', 'NUMERO', 'GEOMETRY'
+                ]
+                columns_str = ', '.join([f'"{col}"' for col in essential_columns])
                 bairros_str = "', '".join(selected_bairros)
                 query = f"""
-                    SELECT * FROM read_parquet('{temp_path}') 
+                    SELECT {columns_str} FROM read_parquet('{temp_path}') 
                     WHERE BAIRRO IN ('{bairros_str}')
                 """
                 df = duckdb.query(query).df()
@@ -819,9 +825,15 @@ def get_slice(offset=0, limit=20000):
             success = loader.download_file(newest_file['id'], temp_path)
             
             if success:
-                # Use DuckDB to efficiently query the parquet file
+                # PROTECTED: Story #001 - Use essential columns only (memory optimization)
+                essential_columns = [
+                    'DOCUMENTO PROPRIETARIO', 'BAIRRO', 'ENDERECO', 'INDICE CADASTRAL',
+                    'COMPLEMENTO ENDERECO', 'AREA CONSTRUCAO', 'AREA TERRENO', 'TIPO CONSTRUTIVO',
+                    'ANO CONSTRUCAO', 'NOME LOGRADOURO', 'NUMERO', 'GEOMETRY'
+                ]
+                columns_str = ', '.join([f'"{col}"' for col in essential_columns])
                 query = f"""
-                    SELECT * FROM '{temp_path}' 
+                    SELECT {columns_str} FROM '{temp_path}' 
                     LIMIT {limit} OFFSET {offset}
                 """
                 df = duckdb.query(query).df()
@@ -977,9 +989,17 @@ def load_bairros_optimized(bairros: list):
         if file_path.lower().endswith('.parquet'):
             print(f"Loading data for {len(bairros)} bairros from Parquet file using DuckDB...")
             try:
-                # Use DuckDB for efficient filtering
+                # PROTECTED: Story #001 - Use essential columns only (memory optimization)
+                # DO NOT MODIFY: This prevents memory crashes by loading only 12 columns instead of 119
+                # See USER_STORIES.md Story #001 for context
+                essential_columns = [
+                    'DOCUMENTO PROPRIETARIO', 'BAIRRO', 'ENDERECO', 'INDICE CADASTRAL',
+                    'COMPLEMENTO ENDERECO', 'AREA CONSTRUCAO', 'AREA TERRENO', 'TIPO CONSTRUTIVO',
+                    'ANO CONSTRUCAO', 'NOME LOGRADOURO', 'NUMERO', 'GEOMETRY'
+                ]
+                columns_str = ', '.join([f'"{col}"' for col in essential_columns])
                 bairros_str = "', '".join(bairros)
-                query = f"SELECT * FROM '{file_path}' WHERE BAIRRO IN ('{bairros_str}')"
+                query = f"SELECT {columns_str} FROM '{file_path}' WHERE BAIRRO IN ('{bairros_str}')"
                 df = duckdb.query(query).df()
                 
                 # FIXED: Don't delete file immediately - let system handle cleanup

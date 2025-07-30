@@ -93,10 +93,21 @@ class LazyColumnLoader:
             except:
                 pass
             
-            # Try to get already loaded data from session state first
+            # FIXED: Try to get fresh loaded data from session state first (not stale filtered_df)
             if 'mega_data_filter_state' in st.session_state:
-                last_applied = st.session_state.mega_data_filter_state.get('last_applied_filters', {})
-                cached_df = last_applied.get('filtered_df')
+                # First try fresh loaded_data (just loaded for current bairros)
+                fresh_loaded_data = st.session_state.mega_data_filter_state.get('loaded_data')
+                if fresh_loaded_data is not None and not fresh_loaded_data.empty and column_name in fresh_loaded_data.columns:
+                    cached_df = fresh_loaded_data
+                    print(f"✅ Using FRESH loaded data with {len(cached_df)} rows for {column_name}")
+                else:
+                    # Fallback to last applied filters (may be stale)
+                    last_applied = st.session_state.mega_data_filter_state.get('last_applied_filters', {})
+                    cached_df = last_applied.get('filtered_df')
+                    if cached_df is not None and not cached_df.empty:
+                        print(f"⚠️ Using STALE cached dataframe with {len(cached_df)} rows for {column_name}")
+                    else:
+                        cached_df = None
                 
                 if cached_df is not None and not cached_df.empty and column_name in cached_df.columns:
                     print(f"✅ Using cached dataframe with {len(cached_df)} rows for {column_name}")
