@@ -226,16 +226,7 @@ After using filters and maps successfully on the Mega Data Set page, a filter ch
 
 **Commit message:**
 ```
-fix: resolve infinite loading bug and optimize map performance
 
-- Remove infinite st.rerun() loop in background operations preventing production crashes
-- Add comprehensive safe_rerun() protection with context tracking and limits
-- Implement smart data caching preventing unnecessary reloads on map interactions  
-- Add cached map preparation for expensive DataFrame to properties conversion
-- Use session state tracking to only reload data when bairros actually change
-- Maintain all functionality while providing smooth map interactions
-
-Resolves infinite loading bug and provides 90%+ performance improvement for map interactions.
 
 🤖 Generated with [Claude Code](https://claude.ai/code)
 

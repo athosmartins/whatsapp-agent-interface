@@ -96,7 +96,7 @@ def send_whatsapp_message(
         "status": 0,        # Custom event
         "clientName": client_name,
         "clientPhoneNumber": clean_phone,
-        "customEvent": "44345",  # Custom event ID
+        "customEvent": "40419",  # Custom event ID
         "metadata": {
             "mensagem_customizada": message_content,  # Message content goes here as a variable
         }
