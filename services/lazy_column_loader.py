@@ -66,6 +66,10 @@ class LazyColumnLoader:
             print(f"Error loading column metadata: {e}")
             return {}
     
+    # PROTECTED: Story #002 - Ultra-fast smart cascading filters with lazy column loading
+    # DO NOT MODIFY: This code prevents filter performance regression (90% memory reduction)
+    # See USER_STORIES.md Story #002 for context
+    # Regression tests will fail if this protection is removed
     @st.cache_data(ttl=3600, max_entries=50)
     @performance_monitor("LazyColumnLoader.get_column_values")
     def get_column_values(_self, column_name: str, filtered_data: Optional[Dict] = None) -> List[str]:

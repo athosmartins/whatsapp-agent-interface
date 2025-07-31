@@ -207,6 +207,11 @@ if "mega_data_filter_state" not in st.session_state:
         "map_render_fingerprint": None,  # Track what data the map was rendered with
     }
 
+# PROTECTED: Story #003 - Production infinite loading bug fix
+# DO NOT MODIFY: This code prevents infinite rerun loops that crash the app in production
+# See USER_STORIES.md Story #003 for context
+# Regression tests will fail if this protection is removed
+
 # Add rerun protection
 if "rerun_count" not in st.session_state.mega_data_filter_state:
     st.session_state.mega_data_filter_state["rerun_count"] = 0
@@ -231,6 +236,10 @@ def safe_rerun(context="unknown"):
     st.rerun()
     return True
 
+# PROTECTED: Story #003 - Smart data caching prevents infinite loading loops
+# DO NOT MODIFY: This cached function prevents repeated data loading that caused crashes
+# See USER_STORIES.md Story #003 for context
+# Regression tests will fail if this protection is removed
 @st.cache_data(ttl=3600, max_entries=5)
 def cached_load_bairros_data(selected_bairros_tuple):
     """Cached wrapper for loading bairro data - prevents reloading on every map interaction."""
@@ -247,6 +256,10 @@ def cached_load_bairros_data(selected_bairros_tuple):
     debug_log(f"CACHE: Loaded {len(result)} rows for {selected_bairros}", "DATA_CACHE")
     return result
 
+# PROTECTED: Story #003 - Map preparation caching prevents expensive DataFrame operations
+# DO NOT MODIFY: This cached function prevents costly repeated operations that caused infinite loading
+# See USER_STORIES.md Story #003 for context
+# Regression tests will fail if this protection is removed
 @st.cache_data(ttl=3600, max_entries=10)
 def prepare_properties_for_map(filtered_df_hash, max_properties):
     """Cache expensive DataFrame to properties conversion."""

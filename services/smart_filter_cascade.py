@@ -8,7 +8,10 @@ from typing import List, Dict, Set, Optional
 from services.lazy_column_loader import get_column_values, get_column_metadata
 import time
 
-
+# PROTECTED: Story #002 - Ultra-fast smart cascading filters
+# DO NOT MODIFY: This class provides 90% memory reduction through intelligent filter cascading
+# See USER_STORIES.md Story #002 for context
+# Regression tests will fail if this protection is removed
 class SmartFilterCascade:
     """
     Manages intelligent filter cascading with minimal reloading.

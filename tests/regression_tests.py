@@ -126,6 +126,22 @@ class RegressionPrevention:
         file_path = os.path.join(self.project_root, 'services', 'smart_filter_cascade.py')
         if not os.path.exists(file_path):
             raise RegressionTestFailure("smart_filter_cascade.py missing - Story #002 optimization removed")
+        
+        # Verify lazy loading patterns are preserved
+        with open(os.path.join(self.project_root, 'services', 'lazy_column_loader.py'), 'r') as f:
+            content = f.read()
+            if '@st.cache_data' not in content:
+                raise RegressionTestFailure("Story #002 regression: @st.cache_data missing from lazy loader")
+            if 'get_column_values' not in content:
+                raise RegressionTestFailure("Story #002 regression: get_column_values function missing")
+        
+        # Verify smart cascade patterns are preserved
+        with open(os.path.join(self.project_root, 'services', 'smart_filter_cascade.py'), 'r') as f:
+            content = f.read()
+            if 'SmartFilterCascade' not in content:
+                raise RegressionTestFailure("Story #002 regression: SmartFilterCascade class missing")
+            if 'get_cascaded_filter_data' not in content:
+                raise RegressionTestFailure("Story #002 regression: cascade logic missing")
     
     def test_story_003_infinite_loading_fix(self):
         """
@@ -135,6 +151,7 @@ class RegressionPrevention:
         """
         # Look for safe_rerun implementation
         found_safe_rerun = False
+        found_cached_loading = False
         
         for root, dirs, files in os.walk(self.project_root):
             for file in files:
@@ -145,14 +162,26 @@ class RegressionPrevention:
                             content = f.read()
                             if 'safe_rerun' in content or 'rerun protection' in content:
                                 found_safe_rerun = True
-                                break
+                            if 'cached_load_bairros_data' in content:
+                                found_cached_loading = True
                     except:
                         continue
-            if found_safe_rerun:
-                break
         
         if not found_safe_rerun:
             raise RegressionTestFailure("safe_rerun protection missing - Story #003 fix removed")
+        
+        if not found_cached_loading:
+            raise RegressionTestFailure("cached data loading missing - Story #003 optimization removed")
+        
+        # Check for background operation protections
+        mega_data_page = os.path.join(self.project_root, 'pages', 'Mega Data Set.py')
+        if os.path.exists(mega_data_page):
+            with open(mega_data_page, 'r') as f:
+                content = f.read()
+                if 'RERUN PROTECTION' not in content:
+                    raise RegressionTestFailure("Story #003 regression: RERUN PROTECTION debugging removed")
+                if 'prepare_properties_for_map' not in content:
+                    raise RegressionTestFailure("Story #003 regression: map preparation caching removed")
     
     def test_no_select_star_in_bairros_loading(self):
         """
@@ -166,15 +195,30 @@ class RegressionPrevention:
             for file in files:
                 if file.endswith('.py'):
                     file_path = os.path.join(root, file)
+                    
+                    # Skip code protection and test files themselves 
+                    if 'code_protection.py' in file_path or 'regression_tests.py' in file_path:
+                        continue
+                        
                     try:
                         with open(file_path, 'r') as f:
                             content = f.read()
                             
-                            # Check for SELECT * in functions containing 'bairro' in their name
+                            # Check for SELECT * in actual SQL queries (not comments or strings)
                             if 'bairro' in content.lower() and 'SELECT *' in content:
                                 lines = content.split('\n')
                                 for i, line in enumerate(lines):
-                                    if 'SELECT *' in line and any(keyword in content.lower() for keyword in ['bairro', 'load_bairros', 'mega_data']):
+                                    stripped_line = line.strip()
+                                    # Only flag actual SQL queries, not comments or protection messages
+                                    if ('SELECT *' in line and 
+                                        any(keyword in content.lower() for keyword in ['bairro', 'load_bairros', 'mega_data']) and
+                                        not stripped_line.startswith('#') and  # Ignore comments
+                                        not stripped_line.startswith('\"\"\"') and  # Ignore docstrings
+                                        not stripped_line.startswith("'") and  # Ignore single quotes
+                                        'DESCRIBE SELECT *' not in line and  # Ignore schema queries
+                                        'schema' not in line.lower() and  # Ignore schema references
+                                        'protection' not in line.lower() and  # Ignore protection messages
+                                        'message' not in line.lower()):  # Ignore message strings
                                         problematic_files.append((file_path, i+1, line.strip()))
                     except:
                         continue

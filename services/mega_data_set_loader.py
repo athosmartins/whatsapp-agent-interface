@@ -973,6 +973,10 @@ def _get_fallback_bairros():
         "Grajaú", "Boa Vista", "Cruzeiro", "Luxemburgo", "Sion"
     ]
 
+# PROTECTED: Story #001 - Memory-efficient bairros loading prevents crashes
+# DO NOT MODIFY: This function uses essential columns only to prevent memory crashes
+# See USER_STORIES.md Story #001 for context
+# Regression tests will fail if this protection is removed
 def load_bairros_optimized(bairros: list):
     """Load data for selected bairros using the most efficient method (Parquet first, then JSON)."""
     if not bairros:
@@ -1203,6 +1207,10 @@ def _ensure_parquet_file() -> bool:
         print(f"Error converting JSON.GZ to Parquet: {e}")
         return False
 
+# PROTECTED: Story #001 - Memory-efficient mega data set loading
+# DO NOT MODIFY: This code provides 80% memory reduction by loading only essential columns
+# See USER_STORIES.md Story #001 for context
+# Regression tests will fail if this protection is removed
 @st.cache_data(ttl=CACHE_DURATION, max_entries=1)
 def _load_essential_columns_only() -> pd.DataFrame:
     """
