@@ -752,12 +752,23 @@ def render_dynamic_filters_optimized():
                             if not unique_values:
                                 st.info(f"Carregando valores para {selected_column}...")
 
-                            # Use a stable key that doesn't change based on operator
+                            # CRITICAL FIX: Use widget state as single source of truth to prevent rapid selection bug
                             stable_key = f"filter_multiselect_{i}_{selected_column}"
+                            if stable_key in st.session_state:
+                                # Widget state exists, validate it against current options
+                                cached_selections = st.session_state[stable_key]
+                                # Only keep selections that are still valid options
+                                current_widget_selections = [
+                                    v for v in cached_selections if v in unique_values
+                                ]
+                            else:
+                                # Widget doesn't exist yet, use valid selections from filter config
+                                current_widget_selections = valid_selections
+                            
                             selected_values = st.multiselect(
                                 "Valores:",
                                 options=unique_values,
-                                default=valid_selections,
+                                default=current_widget_selections,
                                 key=stable_key,
                             )
                             
@@ -779,6 +790,7 @@ def render_dynamic_filters_optimized():
                             else:
                                 debug_log(f"Filter {i} value unchanged", "FILTER_NO_CHANGE")
                             
+                            # Sync widget state back to filter config
                             filter_config["value"] = selected_values
                             debug_log(f"Filter {i} value set to: {selected_values}", "FILTER_SET")
                         else:
@@ -946,15 +958,29 @@ try:
         # Bairro selection
         col1, col2 = st.columns([1, 2])
         with col1:
+            # CRITICAL FIX: Use widget state as single source of truth to prevent rapid selection bug
+            widget_key = "bairros_multiselect"
+            if widget_key in st.session_state:
+                # Widget state exists, validate it against available bairros
+                cached_bairros = st.session_state[widget_key]
+                # Only keep bairros that are still available
+                current_bairros = [
+                    b for b in cached_bairros if b in available_bairros
+                ]
+            else:
+                current_bairros = st.session_state.mega_data_filter_state.get("bairro_filter", [])
+            
             selected_bairros = st.multiselect(
                 "📍 Selecione os bairros:",
                 options=available_bairros,
+                default=current_bairros,
+                key=widget_key,
                 help="Selecione apenas os bairros que você precisa para reduzir drasticamente o uso de memória"
             )
         
         with col2:
             if selected_bairros:
-                # Store selected bairros in session state
+                # Sync selected bairros to persistent session state
                 st.session_state.mega_data_filter_state["bairro_filter"] = selected_bairros
                 
                 estimated_reduction = (len(selected_bairros) / len(available_bairros)) * 100
