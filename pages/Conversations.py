@@ -1409,6 +1409,28 @@ try:
                     st.session_state.processor_conversation_data = (
                         selected_conv_info.to_dict()
                     )
+                    
+                    # ★ NAVIGATION CONTEXT PRESERVATION - Store filtered conversations for processor navigation
+                    st.session_state.processor_filtered_conversations = filtered_df.copy()
+                    st.session_state.processor_navigation_context = {
+                        'total_filtered': len(filtered_df),
+                        'conversation_ids': filtered_df['conversation_id'].tolist(),
+                        'from_conversations_page': True,
+                        'applied_filters': {
+                            'display_names': selected_display_names,
+                            'phone_numbers': selected_phone_numbers,
+                            'expected_names': selected_expected_names,
+                            'cpfs': selected_cpfs,
+                            'bairros': selected_bairros,
+                            'classificacoes': selected_classificacoes,
+                            'statuses': selected_statuses,
+                            'enderecos': selected_enderecos,
+                            'complementos': selected_complementos,
+                            'only_unarchived': only_unarchived,
+                            'only_unread': only_unread,
+                            'property_status_filter': property_status_filter
+                        }
+                    }
 
                     # Get conversation_id for URL parameter
                     conversation_id = st.session_state.selected_conversation_id

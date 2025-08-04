@@ -741,6 +741,7 @@ DEV = True  # Set based on your environment
 
 
 # ─── DATA LOADER ────────────────────────────────────────────────────────────
+@st.cache_data(ttl=300)  # Cache for 5 minutes
 def load_data():
     """Load the WhatsApp conversations DataFrame."""
     return get_dataframe()
@@ -1250,30 +1251,80 @@ initialize_session_state()
 df = st.session_state.master_df
 
 # ─── AUTO-LOADING CONVERSATION WITH ERROR HANDLING ───────────────────────
-# If auto_load_conversation is specified, find and load that conversation
-if auto_load_conversation:
+# Always check current URL for conversation_id (handles navigation)
+current_url_conversation_id = st.query_params.get("conversation_id", None)
+auto_load_target = auto_load_conversation or current_url_conversation_id
+
+# If we have navigation context, we can't rely on dataframe index since it only has 1 row
+# Instead, we'll create a synthetic row for the current conversation
+if ("processor_navigation_context" in st.session_state and 
+    st.session_state.processor_navigation_context.get("from_conversations_page", False) and
+    current_url_conversation_id):
+    
+    # Load the full data to find the specific conversation
+    full_df = load_data()  # This loads all conversations
+    
+    # Check which column exists and search appropriately
+    if "conversation_id" in full_df.columns:
+        current_conversation_match = full_df[
+            full_df["conversation_id"] == current_url_conversation_id
+        ]
+    elif "whatsapp_number" in full_df.columns:
+        current_conversation_match = full_df[
+            full_df["whatsapp_number"] == current_url_conversation_id
+        ]
+    else:
+        current_conversation_match = pd.DataFrame()  # Empty if no matching column
+    
+    if not current_conversation_match.empty:
+        # Replace the master_df with just this conversation for display
+        st.session_state.master_df = current_conversation_match.copy()
+        df = st.session_state.master_df  # Update our local reference
+        st.session_state.idx = 0  # Always index 0 since we have just one row
+        
+        # ALWAYS show debug info to track what's happening
+        print(f"✅ NAVIGATION SUCCESS: Found and loaded conversation {current_url_conversation_id}")
+        print(f"   - Conversation data shape: {current_conversation_match.shape}")
+        print(f"   - Contact name: {current_conversation_match.iloc[0].get('display_name', 'N/A')}")
+        print(f"   - Phone: {current_conversation_match.iloc[0].get('whatsapp_number', 'N/A')}")
+        
+        if DEBUG:
+            st.success(f"✅ Navigation: Loaded conversation {current_url_conversation_id}")
+    else:
+        # ALWAYS show debug info when conversation not found
+        print(f"❌ NAVIGATION FAILED: Conversation {current_url_conversation_id} NOT FOUND")
+        print(f"   - Full dataframe shape: {full_df.shape}")
+        print(f"   - Available columns: {list(full_df.columns)}")
+        if "whatsapp_number" in full_df.columns:
+            print(f"   - Sample whatsapp_numbers: {full_df['whatsapp_number'].head().tolist()}")
+        
+        if DEBUG:
+            st.warning(f"⚠️ Navigation: Conversation {current_url_conversation_id} not found")
+
+# Fallback: Standard auto-loading for cases without navigation context
+elif auto_load_target:
     try:
         # Search for the conversation by conversation_id or whatsapp_number
         if "conversation_id" in df.columns:
-            matching_conversations = df[df["conversation_id"] == auto_load_conversation]
+            matching_conversations = df[df["conversation_id"] == auto_load_target]
         else:
-            matching_conversations = df[df["whatsapp_number"] == auto_load_conversation]
+            matching_conversations = df[df["whatsapp_number"] == auto_load_target]
 
         if not matching_conversations.empty:
             # Found the conversation, set idx to its position
             conversation_idx = matching_conversations.index[0]
             st.session_state.idx = conversation_idx
             if DEBUG:
-                st.success(f"✅ Successfully loaded conversation: {auto_load_conversation}")
+                st.success(f"✅ Successfully loaded conversation: {auto_load_target}")
         else:
             if DEBUG:
                 st.warning(
-                    f"⚠️ Conversation {auto_load_conversation} not found in current dataset"
+                    f"⚠️ Conversation {auto_load_target} not found in current dataset"
                 )
                 
                 # Show debug info for missing conversation
                 with st.expander("🔍 Debug: Why conversation not found?", expanded=False):
-                    st.write(f"**Looking for:** {auto_load_conversation}")
+                    st.write(f"**Looking for:** {auto_load_target}")
                     st.write(f"**DataFrame shape:** {df.shape}")
                     st.write(f"**Available columns:** {list(df.columns)}")
                     
@@ -1340,8 +1391,29 @@ if "OBITO PROVAVEL" in df.columns and "OBITO_PROVAVEL" not in df.columns:
 # ─── HEADER & PROGRESS ──────────────────────────────────────────────────────
 _, progress_col, _ = st.columns([1, 2, 1])
 with progress_col:
-    st.progress((idx + 1) / len(df))
-    st.caption(f"{idx + 1}/{len(df)} mensagens processadas")
+    # Check if we have navigation context from Conversations page
+    if ("processor_navigation_context" in st.session_state and 
+        st.session_state.processor_navigation_context.get("from_conversations_page", False)):
+        
+        nav_context = st.session_state.processor_navigation_context
+        conversation_ids = nav_context.get("conversation_ids", [])
+        # Get current conversation ID from URL (most up-to-date after navigation)
+        current_conversation_id = st.query_params.get("conversation_id", row.get("conversation_id", row.get("whatsapp_number", "")))
+        
+        # Find current position in filtered results
+        if current_conversation_id in conversation_ids:
+            current_position = conversation_ids.index(current_conversation_id) + 1
+            total_filtered = len(conversation_ids)
+            st.progress(current_position / total_filtered)
+            st.caption(f"{current_position}/{total_filtered} mensagens processadas (filtradas)")
+        else:
+            # Fallback to original behavior
+            st.progress((idx + 1) / len(df))
+            st.caption(f"{idx + 1}/{len(df)} mensagens processadas")
+    else:
+        # Original behavior when not coming from Conversations page
+        st.progress((idx + 1) / len(df))
+        st.caption(f"{idx + 1}/{len(df)} mensagens processadas")
 st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
 
 # Dashboard navigation moved to bottom
@@ -1352,6 +1424,39 @@ st.markdown("<div style='margin-top:12px'></div>", unsafe_allow_html=True)
 # ─── NAVIGATION TOP ─────────────────────────────────────────────────────────
 def goto_prev():
     """Go to the previous conversation."""
+    # Check if we have navigation context from Conversations page
+    if ("processor_navigation_context" in st.session_state and 
+        st.session_state.processor_navigation_context.get("from_conversations_page", False)):
+        
+        # Use navigation context instead of limited dataframe
+        nav_context = st.session_state.processor_navigation_context
+        conversation_ids = nav_context.get("conversation_ids", [])
+        current_conversation_id = st.query_params.get("conversation_id", "")
+        
+        print(f"🔍 GOTO_PREV - Using navigation context with {len(conversation_ids)} conversations")
+        
+        if current_conversation_id in conversation_ids:
+            current_position = conversation_ids.index(current_conversation_id)
+            print(f"🔍 GOTO_PREV - Current position: {current_position + 1}/{len(conversation_ids)}")
+            
+            if current_position > 0:
+                # Go to previous conversation in filtered list
+                prev_conversation_id = conversation_ids[current_position - 1]
+                print(f"🔍 GOTO_PREV - Navigating to: {prev_conversation_id}")
+                st.query_params["conversation_id"] = prev_conversation_id
+                return
+            else:
+                print("🔍 GOTO_PREV - Already at first conversation in filtered list")
+                return
+        else:
+            print(f"🔍 GOTO_PREV - Current conversation not found in navigation context")
+    
+    # Access dataframe from session state for fallback
+    df = st.session_state.master_df
+    
+    # Debug logging
+    print(f"🔍 GOTO_PREV - Fallback: Current idx: {st.session_state.idx}, Total conversations: {len(df)}")
+    
     # Cleanup sync for current conversation
     current_row = df.iloc[st.session_state.idx]
     current_conversation_id = current_row.get("conversation_id", current_row.get("whatsapp_number", ""))
@@ -1371,7 +1476,35 @@ def goto_prev():
         if key in st.session_state:
             del st.session_state[key]
     
+    # Check if we have navigation context from Conversations page
+    if ("processor_navigation_context" in st.session_state and 
+        st.session_state.processor_navigation_context.get("from_conversations_page", False)):
+        
+        nav_context = st.session_state.processor_navigation_context
+        conversation_ids = nav_context.get("conversation_ids", [])
+        
+        # Find current position in filtered results
+        if current_conversation_id in conversation_ids:
+            current_position = conversation_ids.index(current_conversation_id)
+            if current_position > 0:
+                # Go to previous conversation in filtered list
+                prev_conversation_id = conversation_ids[current_position - 1]
+                
+                # Find this conversation in the main dataframe
+                matching_rows = df[
+                    (df["conversation_id"] == prev_conversation_id) |
+                    (df["whatsapp_number"] == prev_conversation_id)
+                ]
+                if not matching_rows.empty:
+                    st.session_state.idx = matching_rows.index[0]
+                    st.query_params["conversation_id"] = prev_conversation_id
+                    return
+    
+    # Fallback to original behavior
+    old_idx = st.session_state.idx
     st.session_state.idx = max(st.session_state.idx - 1, 0)
+    print(f"🔍 GOTO_PREV - Changed idx from {old_idx} to {st.session_state.idx}")
+    
     # Update URL with conversation_id
     new_idx = st.session_state.idx
     if new_idx < len(df):
@@ -1380,10 +1513,44 @@ def goto_prev():
         )
         if conversation_id:
             st.query_params["conversation_id"] = conversation_id
+            print(f"🔍 GOTO_PREV - Updated URL to conversation_id: {conversation_id}")
 
 
 def goto_next():
     """Go to the next conversation."""
+    # Check if we have navigation context from Conversations page
+    if ("processor_navigation_context" in st.session_state and 
+        st.session_state.processor_navigation_context.get("from_conversations_page", False)):
+        
+        # Use navigation context instead of limited dataframe
+        nav_context = st.session_state.processor_navigation_context
+        conversation_ids = nav_context.get("conversation_ids", [])
+        current_conversation_id = st.query_params.get("conversation_id", "")
+        
+        print(f"🔍 GOTO_NEXT - Using navigation context with {len(conversation_ids)} conversations")
+        
+        if current_conversation_id in conversation_ids:
+            current_position = conversation_ids.index(current_conversation_id)
+            print(f"🔍 GOTO_NEXT - Current position: {current_position + 1}/{len(conversation_ids)}")
+            
+            if current_position < len(conversation_ids) - 1:
+                # Go to next conversation in filtered list
+                next_conversation_id = conversation_ids[current_position + 1]
+                print(f"🔍 GOTO_NEXT - Navigating to: {next_conversation_id}")
+                st.query_params["conversation_id"] = next_conversation_id
+                return
+            else:
+                print("🔍 GOTO_NEXT - Already at last conversation in filtered list")
+                return
+        else:
+            print(f"🔍 GOTO_NEXT - Current conversation not found in navigation context")
+    
+    # Access dataframe from session state for fallback
+    df = st.session_state.master_df
+    
+    # Debug logging
+    print(f"🔍 GOTO_NEXT - Fallback: Current idx: {st.session_state.idx}, Total conversations: {len(df)}")
+    
     # Cleanup sync for current conversation
     current_row = df.iloc[st.session_state.idx]
     current_conversation_id = current_row.get("conversation_id", current_row.get("whatsapp_number", ""))
@@ -1403,7 +1570,35 @@ def goto_next():
         if key in st.session_state:
             del st.session_state[key]
     
+    # Check if we have navigation context from Conversations page
+    if ("processor_navigation_context" in st.session_state and 
+        st.session_state.processor_navigation_context.get("from_conversations_page", False)):
+        
+        nav_context = st.session_state.processor_navigation_context
+        conversation_ids = nav_context.get("conversation_ids", [])
+        
+        # Find current position in filtered results
+        if current_conversation_id in conversation_ids:
+            current_position = conversation_ids.index(current_conversation_id)
+            if current_position < len(conversation_ids) - 1:
+                # Go to next conversation in filtered list
+                next_conversation_id = conversation_ids[current_position + 1]
+                
+                # Find this conversation in the main dataframe
+                matching_rows = df[
+                    (df["conversation_id"] == next_conversation_id) |
+                    (df["whatsapp_number"] == next_conversation_id)
+                ]
+                if not matching_rows.empty:
+                    st.session_state.idx = matching_rows.index[0]
+                    st.query_params["conversation_id"] = next_conversation_id
+                    return
+    
+    # Fallback to original behavior
+    old_idx = st.session_state.idx
     st.session_state.idx = min(st.session_state.idx + 1, len(df) - 1)
+    print(f"🔍 GOTO_NEXT - Changed idx from {old_idx} to {st.session_state.idx}")
+    
     # Update URL with conversation_id
     new_idx = st.session_state.idx
     if new_idx < len(df):
@@ -1412,16 +1607,34 @@ def goto_next():
         )
         if conversation_id:
             st.query_params["conversation_id"] = conversation_id
+            print(f"🔍 GOTO_NEXT - Updated URL to conversation_id: {conversation_id}")
 
 
 nav_prev_col, nav_property_col, nav_archive_col, nav_next_col = st.columns([1, 1, 1, 1])
 with nav_prev_col:
+    # Calculate prev button disabled state based on navigation context
+    prev_disabled = False
+    if ("processor_navigation_context" in st.session_state and 
+        st.session_state.processor_navigation_context.get("from_conversations_page", False)):
+        
+        nav_context = st.session_state.processor_navigation_context
+        conversation_ids = nav_context.get("conversation_ids", [])
+        current_conversation_id = row.get("conversation_id", row.get("whatsapp_number", ""))
+        
+        if current_conversation_id in conversation_ids:
+            current_position = conversation_ids.index(current_conversation_id)
+            prev_disabled = (current_position == 0)
+        else:
+            prev_disabled = True  # Not in filtered list
+    else:
+        prev_disabled = bool(idx == 0)  # Original behavior
+    
     st.button(
         "⬅️ Anterior",
         key="top_prev",
-        disabled=bool(idx == 0),
-        on_click=goto_prev,
+        disabled=True,  # Always disabled
         use_container_width=True,
+        help="Navegação entre conversas filtradas temporariamente desabilitada"
     )
 with nav_property_col:
     if st.button(
@@ -1459,12 +1672,29 @@ with nav_archive_col:
         else:
             st.error("Número de telefone não encontrado para esta conversa.")
 with nav_next_col:
+    # Calculate next button disabled state based on navigation context
+    next_disabled = False
+    if ("processor_navigation_context" in st.session_state and 
+        st.session_state.processor_navigation_context.get("from_conversations_page", False)):
+        
+        nav_context = st.session_state.processor_navigation_context
+        conversation_ids = nav_context.get("conversation_ids", [])
+        current_conversation_id = row.get("conversation_id", row.get("whatsapp_number", ""))
+        
+        if current_conversation_id in conversation_ids:
+            current_position = conversation_ids.index(current_conversation_id)
+            next_disabled = (current_position >= len(conversation_ids) - 1)
+        else:
+            next_disabled = True  # Not in filtered list
+    else:
+        next_disabled = bool(idx >= len(df) - 1)  # Original behavior
+    
     st.button(
         "Próximo ➡️",
         key="top_next",
-        disabled=bool(idx >= len(df) - 1),
-        on_click=goto_next,
+        disabled=True,  # Always disabled
         use_container_width=True,
+        help="Navegação entre conversas filtradas temporariamente desabilitada"
     )
 
 # ─── SYNC INITIALIZATION ────────────────────────────────────────────────────
@@ -1483,8 +1713,8 @@ if conversation_id:
     # Setup auto-sync
     setup_conversation_sync(conversation_id)
     
-    # Check for sync updates and refresh if needed
-    if check_for_sync_updates(conversation_id):
+    # Check for sync updates and refresh if needed (only when auto-sync is enabled)
+    if st.session_state.get('auto_sync_enabled', False) and check_for_sync_updates(conversation_id):
         st.rerun()
     
     
@@ -1501,10 +1731,883 @@ else:
         st.error("🚨 **Sync Error:** No conversation_id found!")
         st.write(f"Row content: {dict(row) if hasattr(row, 'keys') else str(row)}")
 
-# ─── MAIN CONTENT LAYOUT ────────────────────────────────────────────────────
+# ─── PRIORITY LOADING LAYOUT ────────────────────────────────────────────────
+# Create empty containers for priority loading
 left_col, right_col = st.columns([1, 1])
 
+# Priority containers (empty initially, filled in order of importance)
 with left_col:
+    contact_container = st.empty()  # Load last: Contact info (slower due to image loading)
+with right_col:
+    chat_container = st.empty()     # Load first: Chat history (most important for user)
+
+# Classification section - load second
+classification_container = st.empty()
+
+# ─── PRIORITY 1: CHAT HISTORY (Most important for user) ────────────────────────
+with chat_container.container():
+    # ─── CHAT HISTORY ───────────────────────────────────────────────────────────
+    
+    # Simple sync status indicator + Console logging for production debugging
+    if conversation_id and st.session_state.get('auto_sync_enabled', True):
+        sync_status = get_sync_status(conversation_id)
+        
+        # Add JavaScript console logging for production debugging
+        st.markdown(f"""
+        <script>
+        // Production sync debugging - visible in Chrome DevTools Console
+        console.log('🔍 SYNC DEBUG - Conversation ID: {conversation_id}');
+        console.log('🔍 SYNC DEBUG - Sync Status:', {dict(sync_status)});
+        console.log('🔍 SYNC DEBUG - Auto-sync enabled:', {st.session_state.get('auto_sync_enabled', True)});
+        console.log('🔍 SYNC DEBUG - Current URL:', window.location.href);
+        console.log('🔍 SYNC DEBUG - Timestamp:', new Date().toISOString());
+        </script>
+        """, unsafe_allow_html=True)
+        
+        if sync_status.get("active", False):
+            next_sync = sync_status.get("next_sync_in", 0)
+            if next_sync > 0:
+                st.info(f"🔄 Auto-sync active • Next check in {int(next_sync)} seconds")
+            else:
+                st.success("🔄 Auto-sync active • Checking for updates...")
+        else:
+            st.warning("⏸️ Auto-sync inactive")
+
+    # Parse the conversation history and display in WhatsApp style
+    try:
+        # First try to load messages from database if we have a conversation_id
+        messages = []
+        conversation_id = row.get("conversation_id")
+        
+        # Conversation header with sync status
+        col1, col2 = st.columns([3, 1])
+
+        with col2:
+            # Show sync status if available
+            if conversation_id:
+                from services.conversation_sync import get_sync_status
+                sync_status = get_sync_status(conversation_id)
+                if sync_status.get("active", False):
+                    next_sync = sync_status.get("next_sync_in", 0)
+                    if next_sync > 0:
+                        st.caption(f"🔄 Sync in {int(next_sync)}s")
+                    else:
+                        st.caption("🔄 Syncing...")
+                else:
+                    st.caption("⏸️ Sync off")
+        
+        # Create cache key for this conversation
+        cache_key = f"messages_{conversation_id}_{idx}"
+        
+        # Check if conversation data was cleared by sync (force reload)
+        force_reload = 'conversation_data' not in st.session_state
+        
+        # Debug information for conversation loading
+        if DEBUG:
+            st.write(f"🔍 **Debug - Conversation Loading:**")
+            st.write(f"- **Phone:** {row.get('whatsapp_number', 'N/A')}")
+            st.write(f"- **Conversation ID:** {conversation_id}")
+            st.write(f"- **Row index:** {idx}")
+            st.write(f"- **DataFrame shape:** {df.shape}")
+        
+        if "conversation_id" in row.index and pd.notna(conversation_id):
+            try:
+                if DEBUG:
+                    st.write(f"⏳ Attempting to load messages for conversation: {conversation_id}")
+                
+                messages_df = get_conversation_messages(conversation_id)
+                
+                if DEBUG:
+                    st.write(f"✅ Messages loaded successfully. Shape: {messages_df.shape if not messages_df.empty else 'Empty DataFrame'}")
+                
+                if not messages_df.empty:
+                    # Convert database messages to the expected format
+                    for msg_idx, msg_row in messages_df.iterrows():
+                        try:
+                            sender = (
+                                "Urb.Link"
+                                if msg_row.get("from_me", False)
+                                else row.get("display_name", "Contact")
+                            )
+                            messages.append(
+                                {
+                                    "sender": sender,
+                                    "msg": msg_row["message_text"],
+                                    "ts": datetime.fromtimestamp(
+                                        msg_row["timestamp"]
+                                    ).strftime("%d/%m/%Y %H:%M"),
+                                }
+                            )
+                        except Exception as msg_error:
+                            st.error(f"❌ **Error processing message {msg_idx}:** {str(msg_error)}")
+                            st.write(f"**Message data:** {dict(msg_row)}")
+                            if DEBUG:
+                                st.exception(msg_error)
+                            
+            except Exception as e:
+                st.error(f"🚨 **CRITICAL ERROR loading conversation messages**")
+                st.error(f"**Conversation ID:** {conversation_id}")
+                st.error(f"**Error type:** {type(e).__name__}")
+                st.error(f"**Error message:** {str(e)}")
+                
+                with st.expander("🔍 Detailed Error Information", expanded=True):
+                    st.write(f"**Phone number:** {row.get('whatsapp_number', 'N/A')}")
+                    st.write(f"**Display name:** {row.get('display_name', 'N/A')}")
+                    st.write(f"**Row data keys:** {list(row.keys())}")
+                    
+                    # Show the actual conversation_id value and type
+                    st.write(f"**Conversation ID type:** {type(conversation_id)}")
+                    st.write(f"**Conversation ID repr:** {repr(conversation_id)}")
+                    
+                    if DEBUG:
+                        st.exception(e)
+                
+                # Don't crash the app, just continue without messages
+                messages = []
+
+        # If no messages from database, fall back to parsed conversation history
+        if (
+            not messages
+            and "conversation_history" in row.index
+            and pd.notna(row["conversation_history"])
+            and row["conversation_history"]
+        ):
+            messages = parse_chat(row["conversation_history"])
+        elif not messages:
+            # No conversation history available
+            messages = []
+
+        if messages:
+            # Build complete HTML like in the old Processor page, but with WhatsApp styling
+            chat_html = "<div style='height: 840px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9;'>"
+
+            # Display messages in WhatsApp style with date headers
+            last_date = None
+
+            for msg in messages:
+                # Parse the timestamp to get date
+                dt = None
+                try:
+                    # Try to parse different timestamp formats
+                    timestamp_str = msg["ts"].strip()
+
+                    # Debug: let's see what format we're dealing with
+                    if DEBUG:
+                        print(f"DEBUG: Parsing timestamp: '{timestamp_str}'")
+
+                    # Try various common formats
+                    formats_to_try = [
+                        "%d/%m/%Y %H:%M",  # 25/06/2025 15:30
+                        "%Y-%m-%d %H:%M",  # 2025-06-25 15:30
+                        "%d/%m/%Y %H:%M:%S",  # 25/06/2025 15:30:45
+                        "%Y-%m-%d %H:%M:%S",  # 2025-06-25 15:30:45
+                        "%H:%M",  # 15:30 (time only)
+                        "%d/%m %H:%M",  # 25/06 15:30 (no year)
+                    ]
+
+                    for fmt in formats_to_try:
+                        try:
+                            dt = datetime.strptime(timestamp_str, fmt)
+                            if fmt == "%H:%M":
+                                # If only time, assume today
+                                dt = dt.replace(
+                                    year=datetime.now().year,
+                                    month=datetime.now().month,
+                                    day=datetime.now().day,
+                                )
+                            elif fmt == "%d/%m %H:%M":
+                                # If no year, assume current year
+                                dt = dt.replace(year=datetime.now().year)
+                            break
+                        except ValueError:
+                            continue
+
+                    if dt:
+                        current_date = dt.date()
+
+                        # Check if we need a date header
+                        if last_date != current_date:
+                            # Create date header in format "25 de Junho, 2025 (Terça-Feira)"
+                            today = datetime.now().date()
+                            from datetime import timedelta
+
+                            if current_date == today:
+                                date_header = "Hoje"
+                            elif current_date == today - timedelta(days=1):
+                                date_header = "Ontem"
+                            else:
+                                # Portuguese month names
+                                months_pt = {
+                                    1: "Janeiro",
+                                    2: "Fevereiro",
+                                    3: "Março",
+                                    4: "Abril",
+                                    5: "Maio",
+                                    6: "Junho",
+                                    7: "Julho",
+                                    8: "Agosto",
+                                    9: "Setembro",
+                                    10: "Outubro",
+                                    11: "Novembro",
+                                    12: "Dezembro",
+                                }
+
+                                # Portuguese weekday names
+                                weekdays_pt = {
+                                    0: "Segunda-feira",
+                                    1: "Terça-feira",
+                                    2: "Quarta-feira",
+                                    3: "Quinta-feira",
+                                    4: "Sexta-feira",
+                                    5: "Sábado",
+                                    6: "Domingo",
+                                }
+
+                                day = dt.day
+                                month = months_pt[dt.month]
+                                year = dt.year
+                                weekday = weekdays_pt[dt.weekday()]
+
+                                # Format: "25 de Junho, 2025 (Terça-Feira)"
+                                date_header = f"{day} de {month}, {year} ({weekday})"
+
+                            # Add date header to HTML
+                            chat_html += f'<div style="text-align: center; margin: 20px 0 10px 0;"><span style="background-color: #e0e0e0; padding: 5px 15px; border-radius: 15px; font-size: 12px; color: #666;">{date_header}</span></div>'
+                            last_date = current_date
+
+                        # Format message time (only HH:MM in BRT)
+                        msg_time = dt.strftime("%H:%M")
+                    else:
+                        # If all parsing fails, extract time manually
+                        if ":" in timestamp_str:
+                            time_part = (
+                                timestamp_str.split()[-1]
+                                if " " in timestamp_str
+                                else timestamp_str
+                            )
+                            if ":" in time_part:
+                                msg_time = time_part[:5]  # Get only HH:MM
+                            else:
+                                msg_time = timestamp_str
+                        else:
+                            msg_time = timestamp_str
+
+                except Exception as e:
+                    # If timestamp parsing fails completely, use original
+                    if DEBUG:
+                        print(f"DEBUG: Timestamp parsing failed: {e}")
+                    msg_time = msg["ts"]
+
+                # Determine if message is from business or contact
+                is_from_me = msg["sender"] in ("Urb.Link", "Athos")
+
+                # Process the message text but DON'T escape HTML tags (we want <strong> to work)
+                clean_msg = bold_asterisks(msg["msg"])
+                clean_time = msg_time
+
+                # DEBUG: Let's see what we're actually working with
+                if DEBUG:
+                    print(f"DEBUG: Message content: '{msg['msg']}'")
+                    print(f"DEBUG: Message length: {len(msg['msg'])}")
+                    print(f"DEBUG: Clean message: '{clean_msg}'")
+                    print(f"DEBUG: Clean message length: {len(clean_msg)}")
+
+                # Create message container (WhatsApp style) - using the original approach
+                if is_from_me:
+                    # Message from the business/user (right side, green-ish)
+                    chat_html += f"""<div style="display: flex; justify-content: flex-end; margin: 2px 0; width: 100%;">
+                        <div style="background-color: #dcf8c6; padding: 8px 12px; border-radius: 18px; max-width: 400px; min-width: 120px; display: inline-block;">
+                            <div style="display: inline-block; max-width: 100%;">{clean_msg}</div>
+                            <div style="font-size: 11px; color: #666; text-align: right; margin-top: 2px;">{clean_time}</div>
+                        </div>
+                    </div>"""
+                else:
+                    # Message from contact (left side, white/light gray)
+                    chat_html += f"""<div style="display: flex; justify-content: flex-start; margin: 2px 0; width: 100%;">
+                        <div style="background-color: #ffffff; padding: 8px 12px; border-radius: 18px; max-width: 400px; min-width: 120px; border: 1px solid #e0e0e0; display: inline-block;">
+                            <div style="display: inline-block; max-width: 100%;">{clean_msg}</div>
+                            <div style="font-size: 11px; color: #666; text-align: right; margin-top: 2px;">{clean_time}</div>
+                        </div>
+                    </div>"""
+
+            # Close the scrollable container
+            chat_html += "</div>"
+
+            # Display the complete chat HTML (same approach as original Processor)
+            st.markdown(chat_html, unsafe_allow_html=True)
+        else:
+            st.info("No conversation history available.")
+
+    except Exception as e:
+        st.error(f"Error displaying conversation history: {e}")
+        st.info("Could not parse conversation history.")
+
+# ─── PRIORITY 2: CLASSIFICATION (User needs this for processing) ────────────────
+with classification_container.container():
+    st.markdown("---")
+    
+    # ─── CLASSIFICAÇÃO & RESPOSTA ───────────────────────────────────────────────
+    st.subheader("📝 Classificação e Resposta")
+    
+    # Set initialization flag to prevent false change detection during widget creation
+    initialization_key = f"initializing_widgets_{idx}"
+    st.session_state[initialization_key] = True
+    
+    # Create two columns for presets and racional
+    preset_col, racional_col = st.columns([1, 1])
+    
+    with preset_col:
+        # Presets dropdown (smaller section)
+        preset_selected = st.selectbox(
+            "Respostas Prontas",
+            options=list(PRESET_RESPONSES.keys()),
+            format_func=lambda tag: tag or "-- selecione uma resposta pronta --",
+            key=f"preset_key_{idx}",  # Unique key per record
+        )
+    
+    with racional_col:
+        # Racional in a compact yellow box
+        st.markdown(
+            f"""
+        <div style="margin-top: 25px;">
+            <strong>📋 Racional usado pela AI classificadora:</strong><br>
+            <div class='reason-box' style="margin-top: 5px; font-size: 0.85rem; max-height: 100px; overflow-y: auto;">
+                {row['Razao']}
+            </div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
+    
+    # Apply preset if selected
+    if preset_selected and preset_selected in PRESET_RESPONSES:
+        preset_data = PRESET_RESPONSES[preset_selected]
+        # Apply preset values directly to master_df
+        for field, value in preset_data.items():
+            update_field(idx, field, value)
+        # Only rerun if actually applying a preset (not on initial load)
+        if f"preset_applied_{idx}" not in st.session_state:
+            st.session_state[f"preset_applied_{idx}"] = True
+            st.rerun()
+    
+    left_col, right_col = st.columns(2)
+    
+    with left_col:
+        # Classificação
+        current_classificacao = row.get("classificacao", "")
+        classificacao_index = (
+            CLASSIFICACAO_OPTS.index(current_classificacao)
+            if current_classificacao in CLASSIFICACAO_OPTS
+            else 0
+        )
+        classificacao_sel = st.selectbox(
+            "🏷️ Classificação",
+            CLASSIFICACAO_OPTS,
+            index=classificacao_index,
+            key=f"classificacao_select_{idx}",
+            on_change=lambda: update_field(
+                idx, "classificacao", st.session_state[f"classificacao_select_{idx}"]
+            ),
+        )
+    
+        # Intenção
+        current_intencao = row.get("intencao", "")
+        intencao_index = (
+            INTENCAO_OPTS.index(current_intencao)
+            if current_intencao in INTENCAO_OPTS
+            else 0
+        )
+        intencao_sel = st.selectbox(
+            "🔍 Intenção",
+            INTENCAO_OPTS,
+            index=intencao_index,
+            key=f"intencao_select_{idx}",
+            on_change=lambda: update_field(
+                idx, "intencao", st.session_state[f"intencao_select_{idx}"]
+            ),
+        )
+    
+        # Ações Urb.Link
+        current_acoes = row.get("acoes_urblink", [])
+        if isinstance(current_acoes, str):
+            import json
+    
+            try:
+                current_acoes = json.loads(current_acoes) if current_acoes else []
+            except:
+                current_acoes = (
+                    [v.strip() for v in current_acoes.split(",") if v.strip()]
+                    if current_acoes
+                    else []
+                )
+        elif not isinstance(current_acoes, list):
+            current_acoes = []
+    
+        def on_acoes_change():
+            new_value = st.session_state[f"acoes_select_{idx}"]
+            update_field(idx, "acoes_urblink", new_value)
+            dbg(f"Acoes updated to: {new_value}")
+    
+        acoes_sel = st.multiselect(
+            "📞 Ações Urb.Link",
+            ACOES_OPTS,
+            default=current_acoes,
+            key=f"acoes_select_{idx}",
+            on_change=on_acoes_change,
+        )
+    
+        # Status Urb.Link
+        status_opts = [""] + STATUS_URBLINK_OPTS
+        current_status = row.get("status_urblink", "")
+        status_index = (
+            status_opts.index(current_status) if current_status in status_opts else 0
+        )
+    
+        def on_status_change():
+            new_value = st.session_state[f"status_select_{idx}"]
+            update_field(idx, "status_urblink", new_value)
+            dbg(f"Status updated to: {new_value}")
+    
+        status_sel = st.selectbox(
+            "🚦 Status Urb.Link",
+            status_opts,
+            index=status_index,
+            key=f"status_select_{idx}",
+            on_change=on_status_change,
+        )
+    
+        # Helper function to safely split comma-separated values
+        def safe_split_csv(value):
+            """Safely split a value into a list, handling various data types."""
+            if pd.isna(value) or value is None:
+                return []
+            value_str = str(value).strip()
+            return (
+                [v.strip() for v in value_str.split(",") if v.strip()] if value_str else []
+            )
+    
+        # Forma de Pagamento
+        current_pagamento = row.get("pagamento", "")
+        pag_default = safe_split_csv(current_pagamento)
+        pagamento_sel = st.multiselect(
+            "💳 Forma de Pagamento",
+            PAGAMENTO_OPTS,
+            default=pag_default,
+            key=f"pagamento_select_{idx}",
+            on_change=lambda: update_field(
+                idx, "pagamento", ", ".join(st.session_state[f"pagamento_select_{idx}"])
+            ),
+        )
+    
+        # Percepção de Valor
+        percepcao_opts = [""] + PERCEPCAO_OPTS
+        current_percepcao = row.get("percepcao_valor_esperado", "")
+        percepcao_index = (
+            percepcao_opts.index(current_percepcao)
+            if current_percepcao in percepcao_opts
+            else 0
+        )
+        percepcao_sel = st.selectbox(
+            "💎 Percepção de Valor",
+            percepcao_opts,
+            index=percepcao_index,
+            key=f"percepcao_select_{idx}",
+            on_change=lambda: update_field(
+                idx, "percepcao_valor_esperado", st.session_state[f"percepcao_select_{idx}"]
+            ),
+        )
+    
+        # Razão Stand-by
+        current_razao = row.get("razao_standby", [])
+        if isinstance(current_razao, str):
+            import json
+    
+            try:
+                current_razao = json.loads(current_razao) if current_razao else []
+            except:
+                current_razao = (
+                    [v.strip() for v in current_razao.split(",") if v.strip()]
+                    if current_razao
+                    else []
+                )
+        elif not isinstance(current_razao, list):
+            current_razao = []
+    
+        def on_razao_change():
+            new_value = st.session_state[f"razao_select_{idx}"]
+            update_field(idx, "razao_standby", new_value)
+            dbg(f"Razao updated to: {new_value}")
+    
+        razao_sel = st.multiselect(
+            "🤔 Razão Stand-by",
+            STANDBY_REASONS,
+            default=current_razao,
+            key=f"razao_select_{idx}",
+            on_change=on_razao_change,
+        )
+    
+    with right_col:
+        # Resposta
+        current_resposta = row.get("resposta", "")
+        resposta_input = st.text_area(
+            "✏️ Resposta",
+            value=current_resposta,
+            height=180,
+            key=f"resposta_input_{idx}",
+            on_change=lambda: update_field(
+                idx, "resposta", st.session_state[f"resposta_input_{idx}"]
+            ),
+        )
+    
+        # Send button for the message
+        if st.button("📤 Enviar Mensagem", key=f"send_btn_{idx}"):
+            if resposta_input.strip():
+                # Get phone number from the conversation data
+                phone_number = row.get("phone_number", "")
+                client_name = row.get("name", "")
+    
+                # Show loading spinner
+                with st.spinner("Enviando mensagem..."):
+                    result = send_whatsapp_message(
+                        phone_number=phone_number,
+                        message_content=resposta_input,
+                        client_name=client_name,
+                    )
+    
+                # Show result
+                if result["success"]:
+                    st.success("✅ Mensagem enviada com sucesso!")
+                else:
+                    # Show detailed error information
+                    st.error("❌ Erro ao enviar mensagem:")
+    
+                    # Create expandable section with full API response details
+                    with st.expander("🔍 Detalhes do Erro (clique para expandir)"):
+                        st.write("**Status Code:**", result.get("status_code", "N/A"))
+                        st.write("**API Success:**", result.get("api_success", "N/A"))
+                        st.write("**API Message:**", result.get("api_message", "N/A"))
+                        st.write("**API Errors:**", result.get("api_errors", "N/A"))
+                        st.write("**Raw API Response:**")
+                        st.code(result.get("api_response", "N/A"))
+                        if result.get("error"):
+                            st.write("**Python Error:**", result.get("error"))
+    
+                        # Show what was sent to the API
+                        st.write("**Dados enviados:**")
+                        st.json(
+                            {
+                                "phone_number": phone_number,
+                                "message_content": (
+                                    resposta_input[:100] + "..."
+                                    if len(resposta_input) > 100
+                                    else resposta_input
+                                ),
+                                "client_name": client_name,
+                            }
+                        )
+            else:
+                st.warning("⚠️ Por favor, digite uma mensagem antes de enviar.")
+    
+        # OBS
+        current_obs = row.get("obs", "")
+    
+        def on_obs_change():
+            new_value = st.session_state[f"obs_input_{idx}"]
+            update_field(idx, "obs", new_value)
+            dbg(f"OBS updated to: {new_value}")
+    
+        obs_input = st.text_area(
+            "📋 OBS",
+            value=current_obs,
+            height=120,
+            key=f"obs_input_{idx}",
+            on_change=on_obs_change,
+        )
+    
+        # Checkboxes
+        def parse_bool_value(value):
+            if isinstance(value, bool):
+                return value
+            elif isinstance(value, str):
+                return value.lower() in ["true", "1", "yes", "on"]
+            elif pd.isna(value) or value is None:
+                return False
+            else:
+                return bool(value)
+    
+        def on_stakeholder_change():
+            new_value = st.session_state[f"stakeholder_input_{idx}"]
+            update_field(idx, "stakeholder", new_value)
+            dbg(f"Stakeholder updated to: {new_value}")
+    
+        def on_intermediador_change():
+            new_value = st.session_state[f"intermediador_input_{idx}"]
+            update_field(idx, "intermediador", new_value)
+            dbg(f"Intermediador updated to: {new_value}")
+    
+        def on_inventario_change():
+            new_value = st.session_state[f"inventario_input_{idx}"]
+            update_field(idx, "inventario_flag", new_value)
+            dbg(f"Inventario updated to: {new_value}")
+    
+        def on_standby_change():
+            new_value = st.session_state[f"standby_input_{idx}"]
+            update_field(idx, "standby", new_value)
+            dbg(f"Standby updated to: {new_value}")
+    
+        # Create layout with checkboxes and calendar icon
+        flags_col, calendar_col = st.columns([5, 1])
+    
+        with flags_col:
+            current_stakeholder = parse_bool_value(row.get("stakeholder", False))
+            stakeholder_input = st.checkbox(
+                "Stakeholder",
+                value=current_stakeholder,
+                key=f"stakeholder_input_{idx}",
+                on_change=on_stakeholder_change,
+            )
+    
+            current_intermediador = parse_bool_value(row.get("intermediador", False))
+            intermediador_input = st.checkbox(
+                "Intermediador",
+                value=current_intermediador,
+                key=f"intermediador_input_{idx}",
+                on_change=on_intermediador_change,
+            )
+    
+            current_inventario = parse_bool_value(row.get("inventario_flag", False))
+            inventario_input = st.checkbox(
+                "Inventário",
+                value=current_inventario,
+                key=f"inventario_input_{idx}",
+                on_change=on_inventario_change,
+            )
+    
+            current_standby = parse_bool_value(row.get("standby", False))
+            standby_input = st.checkbox(
+                "Stand-by",
+                value=current_standby,
+                key=f"standby_input_{idx}",
+                on_change=on_standby_change,
+            )
+    
+        with calendar_col:
+            # Calendar icon button for follow-up date
+            current_followup = row.get("followup_date", "")
+            current_followup_display = st.session_state.get(
+                f"followup_date_display_{idx}", ""
+            )
+    
+            if current_followup:
+                button_text = "📅✅"
+                # Show user-friendly format in tooltip if available, otherwise convert ISO to display format
+                if current_followup_display:
+                    button_help = f"Follow-up: {current_followup_display}"
+                else:
+                    # Convert ISO format to display format for existing data
+                    try:
+                        from datetime import datetime
+    
+                        date_obj = datetime.strptime(current_followup, "%Y-%m-%d").date()
+                        days_pt = [
+                            "Segunda",
+                            "Terça",
+                            "Quarta",
+                            "Quinta",
+                            "Sexta",
+                            "Sábado",
+                            "Domingo",
+                        ]
+                        day_name = days_pt[date_obj.weekday()]
+                        display_format = f"{date_obj.strftime('%d/%m/%Y')} ({day_name})"
+                        button_help = f"Follow-up: {display_format}"
+                    except:
+                        button_help = f"Follow-up: {current_followup}"
+            else:
+                button_text = "📅"
+                button_help = "Definir data de follow-up"
+    
+            if st.button(button_text, key=f"calendar_btn_{idx}", help=button_help):
+                st.session_state[f"show_followup_modal_{idx}"] = True
+    
+        # Follow-up date modal
+        if st.session_state.get(f"show_followup_modal_{idx}", False):
+            with st.container():
+                st.markdown("---")
+                st.subheader("📅 Definir Follow-up")
+    
+                # Follow-up input fields
+                followup_col1, followup_col2 = st.columns([1, 1])
+    
+                with followup_col1:
+                    followup_amount = st.number_input(
+                        "Quantidade",
+                        min_value=1,
+                        max_value=365,
+                        value=st.session_state.get(f"followup_amount_{idx}", 1),
+                        key=f"followup_amount_{idx}",
+                    )
+    
+                with followup_col2:
+                    followup_unit = st.selectbox(
+                        "Período",
+                        options=["dias", "semanas", "meses"],
+                        index=["dias", "semanas", "meses"].index(
+                            st.session_state.get(f"followup_unit_{idx}", "dias")
+                        ),
+                        key=f"followup_unit_{idx}",
+                    )
+    
+                # Calculate automatically when inputs change
+                from datetime import datetime, timedelta
+    
+                try:
+                    from dateutil.relativedelta import relativedelta
+    
+                    has_relativedelta = True
+                except ImportError:
+                    has_relativedelta = False
+    
+                # Calculate follow-up date
+                today = datetime.now().date()
+    
+                if followup_unit == "dias":
+                    target_date = today + timedelta(days=followup_amount)
+                elif followup_unit == "semanas":
+                    target_date = today + timedelta(weeks=followup_amount)
+                elif followup_unit == "meses":
+                    # Use relativedelta for accurate month calculation
+                    if has_relativedelta:
+                        target_date = today + relativedelta(months=followup_amount)
+                    else:
+                        # Fallback to approximate calculation if relativedelta is not available
+                        target_date = today + timedelta(days=followup_amount * 30)
+    
+                # Check if it's a business day (Monday=0, Sunday=6)
+                while target_date.weekday() >= 5:  # Saturday=5, Sunday=6
+                    target_date += timedelta(days=1)
+    
+                # Create two formats: one for display and one for spreadsheet
+                iso_date = target_date.strftime("%Y-%m-%d")  # For spreadsheet (2025-12-28)
+                days_pt = [
+                    "Segunda",
+                    "Terça",
+                    "Quarta",
+                    "Quinta",
+                    "Sexta",
+                    "Sábado",
+                    "Domingo",
+                ]
+                day_name = days_pt[target_date.weekday()]
+                display_date = f"{target_date.strftime('%d/%m/%Y')} ({day_name})"  # For display (28/12/2025 (Segunda))
+    
+                # Update the follow-up date automatically
+                current_followup_display = st.session_state.get(
+                    f"followup_date_display_{idx}", ""
+                )
+                current_followup_iso = st.session_state.get(f"followup_date_{idx}", "")
+    
+                if (
+                    current_followup_display != display_date
+                    or current_followup_iso != iso_date
+                ):
+                    st.session_state[f"followup_date_display_{idx}"] = display_date
+                    st.session_state[f"followup_date_{idx}"] = iso_date
+                    update_field(
+                        idx, "followup_date", iso_date
+                    )  # Store ISO format in dataframe
+    
+                # Display calculated date
+                if st.session_state.get(f"followup_date_display_{idx}"):
+                    st.success(
+                        f"📅 Follow-up agendado para: **{st.session_state[f'followup_date_display_{idx}']}**"
+                    )
+    
+                # Action buttons
+                button_col1, button_col2 = st.columns([1, 1])
+    
+                with button_col1:
+                    if st.button("Limpar", key=f"clear_followup_{idx}"):
+                        st.session_state[f"followup_date_{idx}"] = ""
+                        st.session_state[f"followup_date_display_{idx}"] = ""
+                        update_field(idx, "followup_date", "")
+                        st.rerun()
+    
+                with button_col2:
+                    if st.button("Fechar", key=f"close_followup_{idx}"):
+                        st.session_state[f"show_followup_modal_{idx}"] = False
+                        st.rerun()
+    
+        # Clear initialization flag - widgets are now created and initialized
+        if initialization_key in st.session_state:
+            del st.session_state[initialization_key]
+    
+        # Show modifications status
+        if idx in st.session_state.original_values:
+            original = st.session_state.original_values[idx]
+            current = st.session_state.master_df.iloc[idx].to_dict()
+            
+            # TEMPORARY DEBUG: Identify why fields are being detected as changed  
+            if DEV and DEBUG:  # Only show in debug mode now
+                changes = {}
+                for field in current.keys():
+                    if field in original:
+                        if str(original[field]) != str(current[field]):  # Use string comparison for consistency
+                            changes[field] = {
+                                'original': original[field], 
+                                'current': current[field],
+                                'original_type': type(original[field]),
+                                'current_type': type(current[field])
+                            }
+                
+                if changes:
+                    with st.expander(f"🐛 Debug: Changes detected ({len(changes)} fields)", expanded=False):
+                        for field, change in changes.items():
+                            st.write(f"**{field}:** `{change['original']}` ({change['original_type'].__name__}) → `{change['current']}` ({change['current_type'].__name__})")
+        
+            # Calculate modifications count properly
+            changes = {}
+            for field in current.keys():
+                if field in original:
+                    # Handle None vs "" and type differences properly
+                    orig_val = original[field]
+                    curr_val = current[field]
+                    
+                    # Normalize None and empty string/array
+                    def is_empty_value(val):
+                        if val is None:
+                            return True
+                        if isinstance(val, str) and val == "":
+                            return True
+                        try:
+                            import numpy as np
+                            if isinstance(val, np.ndarray):
+                                return val.size == 0
+                        except ImportError:
+                            pass
+                        if hasattr(val, '__len__') and not isinstance(val, str):
+                            return len(val) == 0
+                        try:
+                            return pd.isna(val)
+                        except:
+                            return False
+                    
+                    if is_empty_value(orig_val):
+                        orig_val = ""
+                    if is_empty_value(curr_val):
+                        curr_val = ""
+                    
+                    # Convert to string for comparison to handle type differences
+                    if str(orig_val) != str(curr_val):
+                        changes[field] = True
+            
+            if changes:
+                st.info(f"🔄 {len(changes)} modificações pendentes")
+            else:
+                st.success("✅ Sem modificações pendentes")
+
+# ─── PRIORITY 3: CONTACT INFO (Load last, slower due to images) ─────────────────
+with contact_container.container():
     # ─── CONTACT SECTION ────────────────────────────────────────────────────────
     hl_words = build_highlights(row["display_name"], row["expected_name"])
 
@@ -1537,14 +2640,15 @@ with left_col:
         if DEBUG:
             dbg(f"No valid picture URL (raw value: {repr(row.get('PictureUrl'))})")
     
-    # Store debug info in session state for production troubleshooting
-    if 'image_debug_log' not in st.session_state:
-        st.session_state.image_debug_log = []
-    if len(st.session_state.image_debug_log) < 5:  # Only keep last 5 entries
-        st.session_state.image_debug_log.append(picture_debug)
-    
-    # Print debug info for console logging
-    print(f"🖼️ Image Debug: {picture_debug}")
+    # Store debug info in session state for production troubleshooting (only when DEBUG is ON)
+    if DEBUG:
+        if 'image_debug_log' not in st.session_state:
+            st.session_state.image_debug_log = []
+        if len(st.session_state.image_debug_log) < 5:  # Only keep last 5 entries
+            st.session_state.image_debug_log.append(picture_debug)
+        
+        # Print debug info for console logging (only in DEBUG mode)
+        print(f"🖼️ Image Debug: {picture_debug}")
 
     display_name = (
         highlight(row["display_name"], hl_words)
@@ -1589,53 +2693,26 @@ with left_col:
         img_id = f"profile_img_{conversation_id.replace('@', '').replace('+', '').replace('-', '')}"
         fallback_id = f"fallback_{conversation_id.replace('@', '').replace('+', '').replace('-', '')}"
         
-        # Simple image with fallback - no complex JavaScript in attributes
-        picture_html = f'''
-        <img id="{img_id}" src="{original_picture}" 
+        # Simple image with fallback - minimal JavaScript to avoid f-string issues
+        picture_html = f'''<img id="{img_id}" src="{original_picture}" 
             style="width: 80px; height: 80px; border-radius: 50%; object-fit: cover; border: 2px solid #ddd;" 
             onerror="this.style.display='none'; document.getElementById('{fallback_id}').style.display='flex';"
             crossorigin="anonymous" />
         <div id="{fallback_id}" style="width: 80px; height: 80px; border-radius: 50%; background-color: #f0f0f0; display: none; align-items: center; justify-content: center; font-size: 24px; border: 2px solid #ddd; cursor: help;" 
              title="Profile picture failed to load">
             📷
-        </div>
-        
-        <script>
-        // Enhanced image loading with proxy fallback
-        (function() {{
-            const img = document.getElementById('{img_id}');
-            const fallback = document.getElementById('{fallback_id}');
-            let proxyTried = false;
-            
-            if (img) {{
-                img.onerror = function() {{
-                    console.log('🖼️ Image Load Failed:', this.src);
-                    
-                    // Try proxy fallback if not already tried
-                    if (!proxyTried && '{picture_proxied}' !== '{original_picture}') {{
-                        console.log('🖼️ Trying proxy fallback');
-                        proxyTried = true;
-                        this.src = '{picture_proxied}';
-                        return;
-                    }}
-                    
-                    // Show fallback
-                    this.style.display = 'none';
-                    if (fallback) fallback.style.display = 'flex';
-                }};
-            }}
-        }})();
-        </script>
-        '''
+        </div>'''
     else:
         picture_html = '<div style="width: 80px; height: 80px; border-radius: 50%; background-color: #f0f0f0; display: flex; align-items: center; justify-content: center; font-size: 32px; border: 2px solid #ddd;" title="No profile picture available">👤</div>'
 
-    contact_html = f"""
+    # Build the complete contact HTML without nesting picture_html variable
+    contact_html_start = f"""
     <div style="height: 400px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9; margin-bottom: 10px;">
         <h3>👤 Informações Pessoais</h3>
         <div style="display: flex; align-items: flex-start; margin-bottom: 10px;">
-            <div style="margin-right: 15px;">
-                {picture_html}
+            <div style="margin-right: 15px;">"""
+    
+    contact_html_end = f"""
             </div>
             <div style="flex: 1;">
                 <div style="margin-bottom: 10px;">
@@ -1656,7 +2733,9 @@ with left_col:
     </div>
     """
 
-    st.markdown(contact_html, unsafe_allow_html=True)
+    # Combine the HTML parts without f-string nesting
+    complete_contact_html = contact_html_start + picture_html + contact_html_end
+    st.markdown(complete_contact_html, unsafe_allow_html=True)
 
     # ─── IMÓVEIS ────────────────────────────────────────────────────────────────
     # Enhanced debugging function
@@ -1965,13 +3044,16 @@ with left_col:
 
                     with prop_col1:
                         # Enhanced property display with more information
+                        # Build optional parts separately to avoid nested f-string issues
+                        build_type_part = f" | <em>{build_type}</em>" if build_type else ""
+                        fraction_part = f" | Fração: {fraction_percent}" if fraction_percent != "N/A" else ""
+                        cadastral_part = f"<br><small style='color: #666;'>Cadastro: {indice_cadastral}</small>" if indice_cadastral else ""
+                        
                         property_info = f"""
                         <div style="margin-bottom: 10px; padding: 8px; border-left: 3px solid #007bff; background-color: #f8f9fa; border-radius: 4px;">
                             <strong>{address}, {neighborhood}</strong><br>
-                            <small>Terreno: {area_terreno_text} m² | Construção: {area_construcao_text} m²</small>
-                            {f" | <em>{build_type}</em>" if build_type else ""}
-                            {f" | Fração: {fraction_percent}" if fraction_percent != "N/A" else ""}
-                            {f"<br><small style='color: #666;'>Cadastro: {indice_cadastral}</small>" if indice_cadastral else ""}
+                            <small>Terreno: {area_terreno_text} m² | Construção: {area_construcao_text} m²{build_type_part}{fraction_part}</small>
+                            {cadastral_part}
                         </div>
                         """
                         st.markdown(property_info, unsafe_allow_html=True)
@@ -2173,844 +3255,6 @@ with right_col:
                 st.success("🔄 Auto-sync active • Checking for updates...")
         else:
             st.warning("⏸️ Auto-sync inactive")
-    
-    # Parse the conversation history and display in WhatsApp style
-    try:
-        # First try to load messages from database if we have a conversation_id
-        messages = []
-        conversation_id = row.get("conversation_id")
-        
-        # Conversation header with sync status
-        col1, col2 = st.columns([3, 1])
-
-        with col2:
-            # Show sync status if available
-            if conversation_id:
-                from services.conversation_sync import get_sync_status
-                sync_status = get_sync_status(conversation_id)
-                if sync_status.get("active", False):
-                    next_sync = sync_status.get("next_sync_in", 0)
-                    if next_sync > 0:
-                        st.caption(f"🔄 Sync in {int(next_sync)}s")
-                    else:
-                        st.caption("🔄 Syncing...")
-                else:
-                    st.caption("⏸️ Sync off")
-        
-        # Create cache key for this conversation
-        cache_key = f"messages_{conversation_id}_{idx}"
-        
-        # Check if conversation data was cleared by sync (force reload)
-        force_reload = 'conversation_data' not in st.session_state
-        
-        # Debug information for conversation loading
-        if DEBUG:
-            st.write(f"🔍 **Debug - Conversation Loading:**")
-            st.write(f"- **Phone:** {row.get('whatsapp_number', 'N/A')}")
-            st.write(f"- **Conversation ID:** {conversation_id}")
-            st.write(f"- **Row index:** {idx}")
-            st.write(f"- **DataFrame shape:** {df.shape}")
-        
-        if "conversation_id" in row.index and pd.notna(conversation_id):
-            try:
-                if DEBUG:
-                    st.write(f"⏳ Attempting to load messages for conversation: {conversation_id}")
-                
-                messages_df = get_conversation_messages(conversation_id)
-                
-                if DEBUG:
-                    st.write(f"✅ Messages loaded successfully. Shape: {messages_df.shape if not messages_df.empty else 'Empty DataFrame'}")
-                
-                if not messages_df.empty:
-                    # Convert database messages to the expected format
-                    for msg_idx, msg_row in messages_df.iterrows():
-                        try:
-                            sender = (
-                                "Urb.Link"
-                                if msg_row.get("from_me", False)
-                                else row.get("display_name", "Contact")
-                            )
-                            messages.append(
-                                {
-                                    "sender": sender,
-                                    "msg": msg_row["message_text"],
-                                    "ts": datetime.fromtimestamp(
-                                        msg_row["timestamp"]
-                                    ).strftime("%d/%m/%Y %H:%M"),
-                                }
-                            )
-                        except Exception as msg_error:
-                            st.error(f"❌ **Error processing message {msg_idx}:** {str(msg_error)}")
-                            st.write(f"**Message data:** {dict(msg_row)}")
-                            if DEBUG:
-                                st.exception(msg_error)
-                            
-            except Exception as e:
-                st.error(f"🚨 **CRITICAL ERROR loading conversation messages**")
-                st.error(f"**Conversation ID:** {conversation_id}")
-                st.error(f"**Error type:** {type(e).__name__}")
-                st.error(f"**Error message:** {str(e)}")
-                
-                with st.expander("🔍 Detailed Error Information", expanded=True):
-                    st.write(f"**Phone number:** {row.get('whatsapp_number', 'N/A')}")
-                    st.write(f"**Display name:** {row.get('display_name', 'N/A')}")
-                    st.write(f"**Row data keys:** {list(row.keys())}")
-                    
-                    # Show the actual conversation_id value and type
-                    st.write(f"**Conversation ID type:** {type(conversation_id)}")
-                    st.write(f"**Conversation ID repr:** {repr(conversation_id)}")
-                    
-                    if DEBUG:
-                        st.exception(e)
-                
-                # Don't crash the app, just continue without messages
-                messages = []
-
-        # If no messages from database, fall back to parsed conversation history
-        if (
-            not messages
-            and "conversation_history" in row.index
-            and pd.notna(row["conversation_history"])
-            and row["conversation_history"]
-        ):
-            messages = parse_chat(row["conversation_history"])
-        elif not messages:
-            # No conversation history available
-            messages = []
-
-        if messages:
-            # Build complete HTML like in the old Processor page, but with WhatsApp styling
-            chat_html = "<div style='height: 840px; overflow-y: auto; border: 1px solid #ddd; padding: 10px; border-radius: 5px; background-color: #f9f9f9;'>"
-
-            # Display messages in WhatsApp style with date headers
-            last_date = None
-
-            for msg in messages:
-                # Parse the timestamp to get date
-                dt = None
-                try:
-                    # Try to parse different timestamp formats
-                    timestamp_str = msg["ts"].strip()
-
-                    # Debug: let's see what format we're dealing with
-                    if DEBUG:
-                        print(f"DEBUG: Parsing timestamp: '{timestamp_str}'")
-
-                    # Try various common formats
-                    formats_to_try = [
-                        "%d/%m/%Y %H:%M",  # 25/06/2025 15:30
-                        "%Y-%m-%d %H:%M",  # 2025-06-25 15:30
-                        "%d/%m/%Y %H:%M:%S",  # 25/06/2025 15:30:45
-                        "%Y-%m-%d %H:%M:%S",  # 2025-06-25 15:30:45
-                        "%H:%M",  # 15:30 (time only)
-                        "%d/%m %H:%M",  # 25/06 15:30 (no year)
-                    ]
-
-                    for fmt in formats_to_try:
-                        try:
-                            dt = datetime.strptime(timestamp_str, fmt)
-                            if fmt == "%H:%M":
-                                # If only time, assume today
-                                dt = dt.replace(
-                                    year=datetime.now().year,
-                                    month=datetime.now().month,
-                                    day=datetime.now().day,
-                                )
-                            elif fmt == "%d/%m %H:%M":
-                                # If no year, assume current year
-                                dt = dt.replace(year=datetime.now().year)
-                            break
-                        except ValueError:
-                            continue
-
-                    if dt:
-                        current_date = dt.date()
-
-                        # Check if we need a date header
-                        if last_date != current_date:
-                            # Create date header in format "25 de Junho, 2025 (Terça-Feira)"
-                            today = datetime.now().date()
-                            from datetime import timedelta
-
-                            if current_date == today:
-                                date_header = "Hoje"
-                            elif current_date == today - timedelta(days=1):
-                                date_header = "Ontem"
-                            else:
-                                # Portuguese month names
-                                months_pt = {
-                                    1: "Janeiro",
-                                    2: "Fevereiro",
-                                    3: "Março",
-                                    4: "Abril",
-                                    5: "Maio",
-                                    6: "Junho",
-                                    7: "Julho",
-                                    8: "Agosto",
-                                    9: "Setembro",
-                                    10: "Outubro",
-                                    11: "Novembro",
-                                    12: "Dezembro",
-                                }
-
-                                # Portuguese weekday names
-                                weekdays_pt = {
-                                    0: "Segunda-feira",
-                                    1: "Terça-feira",
-                                    2: "Quarta-feira",
-                                    3: "Quinta-feira",
-                                    4: "Sexta-feira",
-                                    5: "Sábado",
-                                    6: "Domingo",
-                                }
-
-                                day = dt.day
-                                month = months_pt[dt.month]
-                                year = dt.year
-                                weekday = weekdays_pt[dt.weekday()]
-
-                                # Format: "25 de Junho, 2025 (Terça-Feira)"
-                                date_header = f"{day} de {month}, {year} ({weekday})"
-
-                            # Add date header to HTML
-                            chat_html += f'<div style="text-align: center; margin: 20px 0 10px 0;"><span style="background-color: #e0e0e0; padding: 5px 15px; border-radius: 15px; font-size: 12px; color: #666;">{date_header}</span></div>'
-                            last_date = current_date
-
-                        # Format message time (only HH:MM in BRT)
-                        msg_time = dt.strftime("%H:%M")
-                    else:
-                        # If all parsing fails, extract time manually
-                        if ":" in timestamp_str:
-                            time_part = (
-                                timestamp_str.split()[-1]
-                                if " " in timestamp_str
-                                else timestamp_str
-                            )
-                            if ":" in time_part:
-                                msg_time = time_part[:5]  # Get only HH:MM
-                            else:
-                                msg_time = timestamp_str
-                        else:
-                            msg_time = timestamp_str
-
-                except Exception as e:
-                    # If timestamp parsing fails completely, use original
-                    if DEBUG:
-                        print(f"DEBUG: Timestamp parsing failed: {e}")
-                    msg_time = msg["ts"]
-
-                # Determine if message is from business or contact
-                is_from_me = msg["sender"] in ("Urb.Link", "Athos")
-
-                # Process the message text but DON'T escape HTML tags (we want <strong> to work)
-                clean_msg = bold_asterisks(msg["msg"])
-                clean_time = msg_time
-
-                # DEBUG: Let's see what we're actually working with
-                if DEBUG:
-                    print(f"DEBUG: Message content: '{msg['msg']}'")
-                    print(f"DEBUG: Message length: {len(msg['msg'])}")
-                    print(f"DEBUG: Clean message: '{clean_msg}'")
-                    print(f"DEBUG: Clean message length: {len(clean_msg)}")
-
-                # Create message container (WhatsApp style) - using the original approach
-                if is_from_me:
-                    # Message from the business/user (right side, green-ish)
-                    chat_html += f"""<div style="display: flex; justify-content: flex-end; margin: 2px 0; width: 100%;">
-                        <div style="background-color: #dcf8c6; padding: 8px 12px; border-radius: 18px; max-width: 400px; min-width: 120px; display: inline-block;">
-                            <div style="display: inline-block; max-width: 100%;">{clean_msg}</div>
-                            <div style="font-size: 11px; color: #666; text-align: right; margin-top: 2px;">{clean_time}</div>
-                        </div>
-                    </div>"""
-                else:
-                    # Message from contact (left side, white/light gray)
-                    chat_html += f"""<div style="display: flex; justify-content: flex-start; margin: 2px 0; width: 100%;">
-                        <div style="background-color: #ffffff; padding: 8px 12px; border-radius: 18px; max-width: 400px; min-width: 120px; border: 1px solid #e0e0e0; display: inline-block;">
-                            <div style="display: inline-block; max-width: 100%;">{clean_msg}</div>
-                            <div style="font-size: 11px; color: #666; text-align: right; margin-top: 2px;">{clean_time}</div>
-                        </div>
-                    </div>"""
-
-            # Close the scrollable container
-            chat_html += "</div>"
-
-            # Display the complete chat HTML (same approach as original Processor)
-            st.markdown(chat_html, unsafe_allow_html=True)
-        else:
-            st.info("No conversation history available.")
-
-    except Exception as e:
-        st.error(f"Error displaying conversation history: {e}")
-        st.info("Could not parse conversation history.")
-
-st.markdown("---")
-
-# ─── CLASSIFICAÇÃO & RESPOSTA ───────────────────────────────────────────────
-st.subheader("📝 Classificação e Resposta")
-
-# Set initialization flag to prevent false change detection during widget creation
-initialization_key = f"initializing_widgets_{idx}"
-st.session_state[initialization_key] = True
-
-# Create two columns for presets and racional
-preset_col, racional_col = st.columns([1, 1])
-
-with preset_col:
-    # Presets dropdown (smaller section)
-    preset_selected = st.selectbox(
-        "Respostas Prontas",
-        options=list(PRESET_RESPONSES.keys()),
-        format_func=lambda tag: tag or "-- selecione uma resposta pronta --",
-        key=f"preset_key_{idx}",  # Unique key per record
-    )
-
-with racional_col:
-    # Racional in a compact yellow box
-    st.markdown(
-        f"""
-    <div style="margin-top: 25px;">
-        <strong>📋 Racional usado pela AI classificadora:</strong><br>
-        <div class='reason-box' style="margin-top: 5px; font-size: 0.85rem; max-height: 100px; overflow-y: auto;">
-            {row['Razao']}
-        </div>
-    </div>
-    """,
-        unsafe_allow_html=True,
-    )
-
-# Apply preset if selected
-if preset_selected and preset_selected in PRESET_RESPONSES:
-    preset_data = PRESET_RESPONSES[preset_selected]
-    # Apply preset values directly to master_df
-    for field, value in preset_data.items():
-        update_field(idx, field, value)
-    st.rerun()
-
-left_col, right_col = st.columns(2)
-
-with left_col:
-    # Classificação
-    current_classificacao = row.get("classificacao", "")
-    classificacao_index = (
-        CLASSIFICACAO_OPTS.index(current_classificacao)
-        if current_classificacao in CLASSIFICACAO_OPTS
-        else 0
-    )
-    classificacao_sel = st.selectbox(
-        "🏷️ Classificação",
-        CLASSIFICACAO_OPTS,
-        index=classificacao_index,
-        key=f"classificacao_select_{idx}",
-        on_change=lambda: update_field(
-            idx, "classificacao", st.session_state[f"classificacao_select_{idx}"]
-        ),
-    )
-
-    # Intenção
-    current_intencao = row.get("intencao", "")
-    intencao_index = (
-        INTENCAO_OPTS.index(current_intencao)
-        if current_intencao in INTENCAO_OPTS
-        else 0
-    )
-    intencao_sel = st.selectbox(
-        "🔍 Intenção",
-        INTENCAO_OPTS,
-        index=intencao_index,
-        key=f"intencao_select_{idx}",
-        on_change=lambda: update_field(
-            idx, "intencao", st.session_state[f"intencao_select_{idx}"]
-        ),
-    )
-
-    # Ações Urb.Link
-    current_acoes = row.get("acoes_urblink", [])
-    if isinstance(current_acoes, str):
-        import json
-
-        try:
-            current_acoes = json.loads(current_acoes) if current_acoes else []
-        except:
-            current_acoes = (
-                [v.strip() for v in current_acoes.split(",") if v.strip()]
-                if current_acoes
-                else []
-            )
-    elif not isinstance(current_acoes, list):
-        current_acoes = []
-
-    def on_acoes_change():
-        new_value = st.session_state[f"acoes_select_{idx}"]
-        update_field(idx, "acoes_urblink", new_value)
-        dbg(f"Acoes updated to: {new_value}")
-
-    acoes_sel = st.multiselect(
-        "📞 Ações Urb.Link",
-        ACOES_OPTS,
-        default=current_acoes,
-        key=f"acoes_select_{idx}",
-        on_change=on_acoes_change,
-    )
-
-    # Status Urb.Link
-    status_opts = [""] + STATUS_URBLINK_OPTS
-    current_status = row.get("status_urblink", "")
-    status_index = (
-        status_opts.index(current_status) if current_status in status_opts else 0
-    )
-
-    def on_status_change():
-        new_value = st.session_state[f"status_select_{idx}"]
-        update_field(idx, "status_urblink", new_value)
-        dbg(f"Status updated to: {new_value}")
-
-    status_sel = st.selectbox(
-        "🚦 Status Urb.Link",
-        status_opts,
-        index=status_index,
-        key=f"status_select_{idx}",
-        on_change=on_status_change,
-    )
-
-    # Helper function to safely split comma-separated values
-    def safe_split_csv(value):
-        """Safely split a value into a list, handling various data types."""
-        if pd.isna(value) or value is None:
-            return []
-        value_str = str(value).strip()
-        return (
-            [v.strip() for v in value_str.split(",") if v.strip()] if value_str else []
-        )
-
-    # Forma de Pagamento
-    current_pagamento = row.get("pagamento", "")
-    pag_default = safe_split_csv(current_pagamento)
-    pagamento_sel = st.multiselect(
-        "💳 Forma de Pagamento",
-        PAGAMENTO_OPTS,
-        default=pag_default,
-        key=f"pagamento_select_{idx}",
-        on_change=lambda: update_field(
-            idx, "pagamento", ", ".join(st.session_state[f"pagamento_select_{idx}"])
-        ),
-    )
-
-    # Percepção de Valor
-    percepcao_opts = [""] + PERCEPCAO_OPTS
-    current_percepcao = row.get("percepcao_valor_esperado", "")
-    percepcao_index = (
-        percepcao_opts.index(current_percepcao)
-        if current_percepcao in percepcao_opts
-        else 0
-    )
-    percepcao_sel = st.selectbox(
-        "💎 Percepção de Valor",
-        percepcao_opts,
-        index=percepcao_index,
-        key=f"percepcao_select_{idx}",
-        on_change=lambda: update_field(
-            idx, "percepcao_valor_esperado", st.session_state[f"percepcao_select_{idx}"]
-        ),
-    )
-
-    # Razão Stand-by
-    current_razao = row.get("razao_standby", [])
-    if isinstance(current_razao, str):
-        import json
-
-        try:
-            current_razao = json.loads(current_razao) if current_razao else []
-        except:
-            current_razao = (
-                [v.strip() for v in current_razao.split(",") if v.strip()]
-                if current_razao
-                else []
-            )
-    elif not isinstance(current_razao, list):
-        current_razao = []
-
-    def on_razao_change():
-        new_value = st.session_state[f"razao_select_{idx}"]
-        update_field(idx, "razao_standby", new_value)
-        dbg(f"Razao updated to: {new_value}")
-
-    razao_sel = st.multiselect(
-        "🤔 Razão Stand-by",
-        STANDBY_REASONS,
-        default=current_razao,
-        key=f"razao_select_{idx}",
-        on_change=on_razao_change,
-    )
-
-with right_col:
-    # Resposta
-    current_resposta = row.get("resposta", "")
-    resposta_input = st.text_area(
-        "✏️ Resposta",
-        value=current_resposta,
-        height=180,
-        key=f"resposta_input_{idx}",
-        on_change=lambda: update_field(
-            idx, "resposta", st.session_state[f"resposta_input_{idx}"]
-        ),
-    )
-
-    # Send button for the message
-    if st.button("📤 Enviar Mensagem", key=f"send_btn_{idx}"):
-        if resposta_input.strip():
-            # Get phone number from the conversation data
-            phone_number = row.get("phone_number", "")
-            client_name = row.get("name", "")
-
-            # Show loading spinner
-            with st.spinner("Enviando mensagem..."):
-                result = send_whatsapp_message(
-                    phone_number=phone_number,
-                    message_content=resposta_input,
-                    client_name=client_name,
-                )
-
-            # Show result
-            if result["success"]:
-                st.success("✅ Mensagem enviada com sucesso!")
-            else:
-                # Show detailed error information
-                st.error("❌ Erro ao enviar mensagem:")
-
-                # Create expandable section with full API response details
-                with st.expander("🔍 Detalhes do Erro (clique para expandir)"):
-                    st.write("**Status Code:**", result.get("status_code", "N/A"))
-                    st.write("**API Success:**", result.get("api_success", "N/A"))
-                    st.write("**API Message:**", result.get("api_message", "N/A"))
-                    st.write("**API Errors:**", result.get("api_errors", "N/A"))
-                    st.write("**Raw API Response:**")
-                    st.code(result.get("api_response", "N/A"))
-                    if result.get("error"):
-                        st.write("**Python Error:**", result.get("error"))
-
-                    # Show what was sent to the API
-                    st.write("**Dados enviados:**")
-                    st.json(
-                        {
-                            "phone_number": phone_number,
-                            "message_content": (
-                                resposta_input[:100] + "..."
-                                if len(resposta_input) > 100
-                                else resposta_input
-                            ),
-                            "client_name": client_name,
-                        }
-                    )
-        else:
-            st.warning("⚠️ Por favor, digite uma mensagem antes de enviar.")
-
-    # OBS
-    current_obs = row.get("obs", "")
-
-    def on_obs_change():
-        new_value = st.session_state[f"obs_input_{idx}"]
-        update_field(idx, "obs", new_value)
-        dbg(f"OBS updated to: {new_value}")
-
-    obs_input = st.text_area(
-        "📋 OBS",
-        value=current_obs,
-        height=120,
-        key=f"obs_input_{idx}",
-        on_change=on_obs_change,
-    )
-
-    # Checkboxes
-    def parse_bool_value(value):
-        if isinstance(value, bool):
-            return value
-        elif isinstance(value, str):
-            return value.lower() in ["true", "1", "yes", "on"]
-        elif pd.isna(value) or value is None:
-            return False
-        else:
-            return bool(value)
-
-    def on_stakeholder_change():
-        new_value = st.session_state[f"stakeholder_input_{idx}"]
-        update_field(idx, "stakeholder", new_value)
-        dbg(f"Stakeholder updated to: {new_value}")
-
-    def on_intermediador_change():
-        new_value = st.session_state[f"intermediador_input_{idx}"]
-        update_field(idx, "intermediador", new_value)
-        dbg(f"Intermediador updated to: {new_value}")
-
-    def on_inventario_change():
-        new_value = st.session_state[f"inventario_input_{idx}"]
-        update_field(idx, "inventario_flag", new_value)
-        dbg(f"Inventario updated to: {new_value}")
-
-    def on_standby_change():
-        new_value = st.session_state[f"standby_input_{idx}"]
-        update_field(idx, "standby", new_value)
-        dbg(f"Standby updated to: {new_value}")
-
-    # Create layout with checkboxes and calendar icon
-    flags_col, calendar_col = st.columns([5, 1])
-
-    with flags_col:
-        current_stakeholder = parse_bool_value(row.get("stakeholder", False))
-        stakeholder_input = st.checkbox(
-            "Stakeholder",
-            value=current_stakeholder,
-            key=f"stakeholder_input_{idx}",
-            on_change=on_stakeholder_change,
-        )
-
-        current_intermediador = parse_bool_value(row.get("intermediador", False))
-        intermediador_input = st.checkbox(
-            "Intermediador",
-            value=current_intermediador,
-            key=f"intermediador_input_{idx}",
-            on_change=on_intermediador_change,
-        )
-
-        current_inventario = parse_bool_value(row.get("inventario_flag", False))
-        inventario_input = st.checkbox(
-            "Inventário",
-            value=current_inventario,
-            key=f"inventario_input_{idx}",
-            on_change=on_inventario_change,
-        )
-
-        current_standby = parse_bool_value(row.get("standby", False))
-        standby_input = st.checkbox(
-            "Stand-by",
-            value=current_standby,
-            key=f"standby_input_{idx}",
-            on_change=on_standby_change,
-        )
-
-    with calendar_col:
-        # Calendar icon button for follow-up date
-        current_followup = row.get("followup_date", "")
-        current_followup_display = st.session_state.get(
-            f"followup_date_display_{idx}", ""
-        )
-
-        if current_followup:
-            button_text = "📅✅"
-            # Show user-friendly format in tooltip if available, otherwise convert ISO to display format
-            if current_followup_display:
-                button_help = f"Follow-up: {current_followup_display}"
-            else:
-                # Convert ISO format to display format for existing data
-                try:
-                    from datetime import datetime
-
-                    date_obj = datetime.strptime(current_followup, "%Y-%m-%d").date()
-                    days_pt = [
-                        "Segunda",
-                        "Terça",
-                        "Quarta",
-                        "Quinta",
-                        "Sexta",
-                        "Sábado",
-                        "Domingo",
-                    ]
-                    day_name = days_pt[date_obj.weekday()]
-                    display_format = f"{date_obj.strftime('%d/%m/%Y')} ({day_name})"
-                    button_help = f"Follow-up: {display_format}"
-                except:
-                    button_help = f"Follow-up: {current_followup}"
-        else:
-            button_text = "📅"
-            button_help = "Definir data de follow-up"
-
-        if st.button(button_text, key=f"calendar_btn_{idx}", help=button_help):
-            st.session_state[f"show_followup_modal_{idx}"] = True
-
-    # Follow-up date modal
-    if st.session_state.get(f"show_followup_modal_{idx}", False):
-        with st.container():
-            st.markdown("---")
-            st.subheader("📅 Definir Follow-up")
-
-            # Follow-up input fields
-            followup_col1, followup_col2 = st.columns([1, 1])
-
-            with followup_col1:
-                followup_amount = st.number_input(
-                    "Quantidade",
-                    min_value=1,
-                    max_value=365,
-                    value=st.session_state.get(f"followup_amount_{idx}", 1),
-                    key=f"followup_amount_{idx}",
-                )
-
-            with followup_col2:
-                followup_unit = st.selectbox(
-                    "Período",
-                    options=["dias", "semanas", "meses"],
-                    index=["dias", "semanas", "meses"].index(
-                        st.session_state.get(f"followup_unit_{idx}", "dias")
-                    ),
-                    key=f"followup_unit_{idx}",
-                )
-
-            # Calculate automatically when inputs change
-            from datetime import datetime, timedelta
-
-            try:
-                from dateutil.relativedelta import relativedelta
-
-                has_relativedelta = True
-            except ImportError:
-                has_relativedelta = False
-
-            # Calculate follow-up date
-            today = datetime.now().date()
-
-            if followup_unit == "dias":
-                target_date = today + timedelta(days=followup_amount)
-            elif followup_unit == "semanas":
-                target_date = today + timedelta(weeks=followup_amount)
-            elif followup_unit == "meses":
-                # Use relativedelta for accurate month calculation
-                if has_relativedelta:
-                    target_date = today + relativedelta(months=followup_amount)
-                else:
-                    # Fallback to approximate calculation if relativedelta is not available
-                    target_date = today + timedelta(days=followup_amount * 30)
-
-            # Check if it's a business day (Monday=0, Sunday=6)
-            while target_date.weekday() >= 5:  # Saturday=5, Sunday=6
-                target_date += timedelta(days=1)
-
-            # Create two formats: one for display and one for spreadsheet
-            iso_date = target_date.strftime("%Y-%m-%d")  # For spreadsheet (2025-12-28)
-            days_pt = [
-                "Segunda",
-                "Terça",
-                "Quarta",
-                "Quinta",
-                "Sexta",
-                "Sábado",
-                "Domingo",
-            ]
-            day_name = days_pt[target_date.weekday()]
-            display_date = f"{target_date.strftime('%d/%m/%Y')} ({day_name})"  # For display (28/12/2025 (Segunda))
-
-            # Update the follow-up date automatically
-            current_followup_display = st.session_state.get(
-                f"followup_date_display_{idx}", ""
-            )
-            current_followup_iso = st.session_state.get(f"followup_date_{idx}", "")
-
-            if (
-                current_followup_display != display_date
-                or current_followup_iso != iso_date
-            ):
-                st.session_state[f"followup_date_display_{idx}"] = display_date
-                st.session_state[f"followup_date_{idx}"] = iso_date
-                update_field(
-                    idx, "followup_date", iso_date
-                )  # Store ISO format in dataframe
-
-            # Display calculated date
-            if st.session_state.get(f"followup_date_display_{idx}"):
-                st.success(
-                    f"📅 Follow-up agendado para: **{st.session_state[f'followup_date_display_{idx}']}**"
-                )
-
-            # Action buttons
-            button_col1, button_col2 = st.columns([1, 1])
-
-            with button_col1:
-                if st.button("Limpar", key=f"clear_followup_{idx}"):
-                    st.session_state[f"followup_date_{idx}"] = ""
-                    st.session_state[f"followup_date_display_{idx}"] = ""
-                    update_field(idx, "followup_date", "")
-                    st.rerun()
-
-            with button_col2:
-                if st.button("Fechar", key=f"close_followup_{idx}"):
-                    st.session_state[f"show_followup_modal_{idx}"] = False
-                    st.rerun()
-
-    # Clear initialization flag - widgets are now created and initialized
-    if initialization_key in st.session_state:
-        del st.session_state[initialization_key]
-
-    # Show modifications status
-    if idx in st.session_state.original_values:
-        original = st.session_state.original_values[idx]
-        current = st.session_state.master_df.iloc[idx].to_dict()
-        
-        # TEMPORARY DEBUG: Identify why fields are being detected as changed  
-        if DEV and DEBUG:  # Only show in debug mode now
-            st.write("🐛 **REAL DEBUG: Change Detection Analysis**")
-            st.write("**Original values (stored when page loaded):**")
-            problematic_fields = ['classificacao', 'intencao', 'pagamento', 'percepcao_valor_esperado', 'resposta']
-            for field in problematic_fields:
-                if field in original:
-                    st.write(f"  {field}: {repr(original[field])}")
-            
-            st.write("**Current dataframe values:**")
-            for field in problematic_fields:
-                if field in current:
-                    st.write(f"  {field}: {repr(current[field])}")
-            
-            st.write("**Field comparisons:**")
-            for field in problematic_fields:
-                if field in original and field in current:
-                    are_equal = compare_values(original[field], current[field])
-                    st.write(f"  {field}: {repr(original[field])} → {repr(current[field])} (Equal: {are_equal})")
-        
-        modified_fields = []
-        for field in original:
-            if field in current and not compare_values(original[field], current[field]):
-                modified_fields.append(field)
-
-        if modified_fields:
-            st.info(f"📝 Campos modificados: {', '.join(modified_fields)}")
-        else:
-            if DEBUG:
-                st.success("✅ Sem modificações")
-
-        # Debug info (remove this later)
-        if DEV and DEBUG:
-            with st.expander("🔍 Debug Info"):
-                st.write("**DataFrame columns:**")
-                st.write(list(st.session_state.master_df.columns))
-                st.write("**Original values:**")
-                st.json(original)
-                st.write("**Current values:**")
-                current_debug = {k: v for k, v in current.items() if k in original}
-                st.json(current_debug)
-                st.write("**All current values for problematic fields:**")
-                problematic_fields = [
-                    "acoes_urblink",
-                    "status_urblink",
-                    "razao_standby",
-                    "obs",
-                    "stakeholder",
-                    "intermediador",
-                    "inventario_flag",
-                    "standby",
-                ]
-                for field in problematic_fields:
-                    if field in current:
-                        st.write(
-                            f"**{field}**: {current[field]} (type: {type(current[field])})"
-                        )
-                    else:
-                        st.write(f"**{field}**: NOT IN CURRENT")
-                st.write("**Field comparisons:**")
-                for field in original:
-                    if field in current:
-                        orig_val = original[field]
-                        curr_val = current[field]
-                        is_equal = compare_values(orig_val, curr_val)
-                        st.write(
-                            f"**{field}**: {orig_val} → {curr_val} (Equal: {is_equal})"
-                        )
 
 # ─── NAVIGATION BOTTOM ──────────────────────────────────────────────────────
 st.markdown("---")
@@ -3018,10 +3262,27 @@ bot_prev_col, dashboard_col, reset_col, sync_col, bot_next_col = st.columns(
     [1, 1, 1, 1, 1]
 )
 with bot_prev_col:
+    # Use same navigation context logic as top buttons
+    prev_disabled = False
+    if ("processor_navigation_context" in st.session_state and 
+        st.session_state.processor_navigation_context.get("from_conversations_page", False)):
+        
+        nav_context = st.session_state.processor_navigation_context
+        conversation_ids = nav_context.get("conversation_ids", [])
+        current_conversation_id = row.get("conversation_id", row.get("whatsapp_number", ""))
+        
+        if current_conversation_id in conversation_ids:
+            current_position = conversation_ids.index(current_conversation_id)
+            prev_disabled = (current_position == 0)
+        else:
+            prev_disabled = True  # Not in filtered list
+    else:
+        prev_disabled = bool(idx == 0)  # Original behavior
+    
     st.button(
         "⬅️ Anterior",
         key="bottom_prev",
-        disabled=bool(idx == 0),
+        disabled=prev_disabled,
         on_click=goto_prev,
         use_container_width=True,
     )
@@ -3208,10 +3469,27 @@ with sync_col:
                     st.code(traceback.format_exc())
 
 with bot_next_col:
+    # Use same navigation context logic as top buttons
+    next_disabled = False
+    if ("processor_navigation_context" in st.session_state and 
+        st.session_state.processor_navigation_context.get("from_conversations_page", False)):
+        
+        nav_context = st.session_state.processor_navigation_context
+        conversation_ids = nav_context.get("conversation_ids", [])
+        current_conversation_id = row.get("conversation_id", row.get("whatsapp_number", ""))
+        
+        if current_conversation_id in conversation_ids:
+            current_position = conversation_ids.index(current_conversation_id)
+            next_disabled = (current_position >= len(conversation_ids) - 1)
+        else:
+            next_disabled = True  # Not in filtered list
+    else:
+        next_disabled = bool(idx >= len(df) - 1)  # Original behavior
+    
     st.button(
         "Próximo ➡️",
         key="bottom_next",
-        disabled=bool(idx >= len(df) - 1),
+        disabled=next_disabled,
         on_click=goto_next,
         use_container_width=True,
     )
@@ -3232,8 +3510,9 @@ try:
         if last_refresh_key not in st.session_state:
             st.session_state[last_refresh_key] = 0
         
-        # Refresh every 3 seconds when operations are running
-        if current_time - st.session_state[last_refresh_key] > 3.0:
+        # Refresh every 3 seconds when operations are running (only when auto-sync is enabled)
+        if (st.session_state.get('auto_sync_enabled', False) and 
+            current_time - st.session_state[last_refresh_key] > 3.0):
             st.session_state[last_refresh_key] = current_time
             st.rerun()
         

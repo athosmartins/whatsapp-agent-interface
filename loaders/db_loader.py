@@ -174,13 +174,28 @@ def _ensure_db() -> str:
     ALWAYS download fresh database from Google Drive folder ID: 1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw
     NEVER use local cached files - this is a critical requirement.
     EXCEPTION: Skip download after manual sync to preserve newly synced messages.
+    EXCEPTION 2: Skip duplicate downloads within the same session unless auto-sync is enabled.
     """
     # On Streamlit Cloud write to /tmp; locally write beside the script
     path = "/tmp/" + LOCAL_DB_PATH if os.getenv("STREAMLIT_SERVER_HEADLESS") else LOCAL_DB_PATH
     
-    # Check if we should skip download after manual sync
+    # Check session state for download optimization
     try:
         import streamlit as st
+        
+        # Skip duplicate downloads within the same session when auto-sync is OFF
+        if (hasattr(st, 'session_state') and 
+            not getattr(st.session_state, 'auto_sync_enabled', True) and
+            getattr(st.session_state, 'db_downloaded_this_session', False) and
+            os.path.isfile(path)):
+            
+            # Reduce verbosity - only print once per session
+            if not getattr(st.session_state, 'skip_message_shown', False):
+                print(f"⏭️ Skipping duplicate database downloads this session (auto-sync OFF)")
+                st.session_state.skip_message_shown = True
+            return path
+        
+        # Check if we should skip download after manual sync
         if hasattr(st, 'session_state') and getattr(st.session_state, 'skip_db_download', False):
             # Reset the flag and use existing database
             st.session_state.skip_db_download = False
@@ -189,6 +204,11 @@ def _ensure_db() -> str:
                 return path
             else:
                 print(f"⚠️ Skip flag set but no database file found, downloading anyway")
+                
+        # Mark that we're downloading in this session
+        if hasattr(st, 'session_state'):
+            st.session_state.db_downloaded_this_session = True
+            
     except:
         pass  # Ignore errors if streamlit is not available
     

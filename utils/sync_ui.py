@@ -18,7 +18,7 @@ from services.conversation_sync import (
 def initialize_sync_state():
     """Initialize sync-related session state variables."""
     if 'auto_sync_enabled' not in st.session_state:
-        st.session_state.auto_sync_enabled = True
+        st.session_state.auto_sync_enabled = False
     if 'sync_notifications' not in st.session_state:
         st.session_state.sync_notifications = True
     if 'current_sync_conversation' not in st.session_state:
@@ -260,6 +260,15 @@ def perform_manual_sync(conversation_id: str):
     if debug_mode:
         st.write(f"🔍 **Manual Sync Debug:** Starting sync for {conversation_id}")
     
+    # Reset session flag to force fresh database download after sync
+    st.session_state.db_downloaded_this_session = False
+    
+    # Clear Streamlit cache to force data reload
+    try:
+        st.cache_data.clear()
+    except:
+        pass  # Ignore if cache clearing fails
+    
     # Console logging for production debugging
     st.markdown(f"""
     <script>
@@ -387,7 +396,12 @@ def render_sync_metrics_card():
 # Auto-refresh mechanism for real-time updates
 def setup_auto_refresh():
     """Setup automatic page refresh for sync updates."""
-    if st.session_state.auto_sync_enabled and st.session_state.current_sync_conversation:
+    # Only enable auto-refresh when auto-sync is explicitly enabled
+    if (hasattr(st.session_state, 'auto_sync_enabled') and 
+        st.session_state.auto_sync_enabled and 
+        hasattr(st.session_state, 'current_sync_conversation') and
+        st.session_state.current_sync_conversation):
+        
         # Add JavaScript for auto-refresh every 30 seconds
         st.markdown("""
         <script>
@@ -404,12 +418,13 @@ def setup_auto_refresh():
         </script>
         """, unsafe_allow_html=True)
     else:
-        # Clear refresh interval if sync is disabled
+        # Always clear refresh interval if sync is disabled or not properly configured
         st.markdown("""
         <script>
         if (window.syncRefreshInterval) {
             clearInterval(window.syncRefreshInterval);
             window.syncRefreshInterval = null;
+            console.log('Auto-refresh disabled - interval cleared');
         }
         </script>
         """, unsafe_allow_html=True)
