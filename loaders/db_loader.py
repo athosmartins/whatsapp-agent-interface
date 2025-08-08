@@ -412,15 +412,19 @@ def get_conversation_details(conversation_id: str) -> dict:
             
     return conversation
 
-def get_conversations_with_sheets_data() -> pd.DataFrame:
-    """Load conversations summary merged with Google Sheets data using advanced variant matching."""
+def get_conversations_with_sheets_data(force_load_spreadsheet: bool = False) -> pd.DataFrame:
+    """Load conversations summary merged with Google Sheets data using advanced variant matching.
+    
+    Args:
+        force_load_spreadsheet: If True, forces fresh load from spreadsheet (for manual "Load Spreadsheet" button)
+    """
     try:
         # Load conversations summary
         conversations_df = get_conversations_summary()
         
-        # Load Google Sheets data
+        # Load Google Sheets data with controlled loading
         from services.spreadsheet import get_sheet_data
-        sheet_data = get_sheet_data()
+        sheet_data = get_sheet_data(force_load=force_load_spreadsheet)
         
         if not sheet_data:
             # Return conversations without merge if sheets data fails
@@ -560,6 +564,10 @@ def get_conversations_with_sheets_data() -> pd.DataFrame:
             
     except Exception as e:
         print(f"Error merging conversations with sheets data: {e}")
+        import traceback
+        print("Full error traceback:")
+        traceback.print_exc()
+        
         # Return conversations without merge if there's an error
         return get_conversations_summary()
 

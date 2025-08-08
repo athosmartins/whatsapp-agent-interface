@@ -245,7 +245,7 @@ def create_property_map(properties: List[Dict[str, Any]]) -> str:
                     # Add polygon to map
                     folium.Polygon(
                         locations=polygon,
-                        color=color,
+                        color="black",
                         weight=2,
                         fillColor=color,
                         fillOpacity=0.3,
@@ -414,6 +414,8 @@ def render_property_map_streamlit(
             polygon_weight = 1
             show_legend = True
             show_tooltips = True
+            map_height = 1000
+            map_width_setting = 1400
             # Note: show_property_info not used in current implementation
             color_by_column = "Índice Sequencial"
             column_name_mapping = {}
@@ -422,18 +424,37 @@ def render_property_map_streamlit(
                 "ENDERECO",
                 "AREA TERRENO",
                 "TIPO CONSTRUTIVO",
-                "AREA CONSTRUCAO",
                 "FRACAO IDEAL",
+                'HAS NET IMOVEIS AD', 
+                'NOME PROPRIETARIO PBH',
+
             ]
             selected_popup_fields = [
-                "ZONA FISCAL",
-                "QUARTEIRAO",
-                "LOTE",
                 "INDICE CADASTRAL",
                 "ZONEAMENTO",
                 "ADE",
                 "DESCRICAO ALTIMETRIA",
                 "GRAU TOMBAMENTO",
+                'NOME PROPRIETARIO PBH',
+                'DOCUMENTO PROPRIETARIO', 
+                'IDADE', 
+                'OBITO PROVAVEL', 
+                'DATA CONSTRUCAO', 
+                'DATA VENDA',
+                'VALOR VENDA',
+                'VALOR M2 TERRENO',
+                'DATA APROVACAO',
+                'USO GERAL',
+                'QTDE PAVIMENTOS',
+                'AREA MEDIA UND',
+                'QTD UND RESIDENCIAL',
+                'QTD UND NAO RESIDENCIAL',
+                'DATA COMUNICADO INICIO OBRA',
+                'NET VALOR',
+                'NET R$/M2',
+                'NET ID',
+                'NET ENDERECO',
+                'COMPLEMENTO ENDERECO',
             ]
         else:
             # Read values from advanced options session state, or use defaults
@@ -446,6 +467,8 @@ def render_property_map_streamlit(
             polygon_weight = st.session_state.get("advanced_polygon_weight", 1)
             show_legend = st.session_state.get("advanced_show_legend", True)
             show_tooltips = st.session_state.get("advanced_show_tooltips", True)
+            map_height = st.session_state.get("advanced_map_height", 1000)
+            map_width_setting = st.session_state.get("advanced_map_width", 1400)
             # Note: show_property_info not used in current implementation
             # Check if STATUS CONTATO column exists, otherwise default to "Índice Sequencial"
             default_color_column = "Índice Sequencial"
@@ -466,21 +489,39 @@ def render_property_map_streamlit(
                     "ENDERECO",
                     "AREA TERRENO",
                     "TIPO CONSTRUTIVO",
-                    "AREA CONSTRUCAO",
                     "FRACAO IDEAL",
+                    'HAS NET IMOVEIS AD', 
+                    'NOME PROPRIETARIO PBH',
                 ],
             )
             selected_popup_fields = st.session_state.get(
                 "advanced_popup_fields",
                 [
-                    "ZONA FISCAL",
-                    "QUARTEIRAO",
-                    "LOTE",
                     "INDICE CADASTRAL",
                     "ZONEAMENTO",
                     "ADE",
                     "DESCRICAO ALTIMETRIA",
                     "GRAU TOMBAMENTO",
+                    'NOME PROPRIETARIO PBH',
+                    'DOCUMENTO PROPRIETARIO', 
+                    'IDADE', 
+                    'OBITO PROVAVEL', 
+                    'DATA CONSTRUCAO', 
+                    'DATA VENDA',
+                    'VALOR VENDA',
+                    'VALOR M2 TERRENO',
+                    'DATA APROVACAO',
+                    'USO GERAL',
+                    'QTDE PAVIMENTOS',
+                    'AREA MEDIA UND',
+                    'QTD UND RESIDENCIAL',
+                    'QTD UND NAO RESIDENCIAL',
+                    'DATA COMUNICADO INICIO OBRA',
+                    'NET VALOR',
+                    'NET R$/M2',
+                    'NET ID',
+                    'NET ENDERECO',
+                    'COMPLEMENTO ENDERECO',
                 ],
             )
 
@@ -593,7 +634,15 @@ def render_property_map_streamlit(
                 actual_field = popup_field_mapping.get(field, field)
                 value = prop.get(actual_field)
 
-                if value and str(value).strip() and str(value).strip() != "N/A":
+                # Check if value is meaningful (not null, empty, or common null representations)
+                str_value = str(value).strip() if value is not None else ""
+                if (value is not None and 
+                    pd.notna(value) and 
+                    str_value and 
+                    str_value.lower() not in ["n/a", "nan", "null", "none", "", " ", "na"] and
+                    len(str_value) > 0 and
+                    # Special handling for COMPLEMENTO ENDERECO - only show if it has meaningful content
+                    not (field == "COMPLEMENTO ENDERECO" and (not str_value or str_value.isspace()))):
                     # Format the field name for display
                     if (
                         field.startswith("👤")
@@ -627,6 +676,31 @@ def render_property_map_streamlit(
                             .replace(".", ",")
                             .replace("X", ".")
                         )
+                    elif (
+                        field == "NET R$/M2"
+                        and isinstance(value, (int, float))
+                        and pd.notna(value)
+                    ):
+                        # Format as R$ X.XXX/m2 (no decimals, dot as thousand separator)
+                        formatted_value = f"R$ {int(value):,}/m2".replace(",", ".")
+                    elif (
+                        field == "AREA MEDIA UND"
+                        and isinstance(value, (int, float))
+                        and pd.notna(value)
+                    ):
+                        # Format as XXm2 (remove .0 for integers)
+                        if value == int(value):
+                            formatted_value = f"{int(value)}m2"
+                        else:
+                            formatted_value = f"{value:.1f}m2"
+                    elif (
+                        field in ["NET ID", "QTDE PAVIMENTOS", "QTD UND RESIDENCIAL", "QTD UND NAO RESIDENCIAL"]
+                        and isinstance(value, (int, float))
+                        and pd.notna(value)
+                        and value == int(value)
+                    ):
+                        # Remove .0 suffix for integer values
+                        formatted_value = str(int(value))
                     elif (
                         field in ["AREA TERRENO", "AREA CONSTRUCAO"]
                         and str(value).replace(".", "").isdigit()
@@ -699,11 +773,15 @@ def render_property_map_streamlit(
                             actual_field = field_mapping.get(field, field)
                             value = prop.get(actual_field)
 
-                            if (
-                                value
-                                and str(value).strip()
-                                and str(value).strip() != "N/A"
-                            ):
+                            # Check if value is meaningful (not null, empty, or common null representations)
+                            str_value = str(value).strip() if value is not None else ""
+                            if (value is not None and 
+                                pd.notna(value) and 
+                                str_value and 
+                                str_value.lower() not in ["n/a", "nan", "null", "none", "", " ", "na"] and
+                                len(str_value) > 0 and
+                                # Special handling for COMPLEMENTO ENDERECO - only show if it has meaningful content
+                                not (field == "COMPLEMENTO ENDERECO" and (not str_value or str_value.isspace()))):
                                 # Format the field name for display
                                 if (
                                     field.startswith("👤")
@@ -762,7 +840,7 @@ def render_property_map_streamlit(
 
                             polygon_obj = folium.Polygon(
                                 locations=polygon,
-                                color=color,
+                                color="black",
                                 weight=polygon_weight,
                                 fillColor=color,
                                 fillOpacity=polygon_opacity,
@@ -771,7 +849,7 @@ def render_property_map_streamlit(
                         else:
                             polygon_obj = folium.Polygon(
                                 locations=polygon,
-                                color=color,
+                                color="black",
                                 weight=polygon_weight,
                                 fillColor=color,
                                 fillOpacity=polygon_opacity,
@@ -856,15 +934,49 @@ def render_property_map_streamlit(
             """
             m.get_root().html.add_child(folium.Element(legend_html))
 
-        # Render map in Streamlit with full width and reasonable height
-        # Use key parameter to maintain map state and prevent unnecessary reruns
-        map_key = f"property_map_{len(properties)}_{hash(str(sorted(properties[0].keys()) if properties else []))}"
-        map_data = st_folium.st_folium(
-            m, 
-            use_container_width=True, 
-            height=600,
-            key=map_key
-        )
+        # Create a controlled container with explicit sizing to prevent white space
+        map_placeholder = st.empty()
+        
+        # Render map in Streamlit with configurable dimensions
+        # Include dimensions in key to force re-render when dimensions change
+        map_key = f"property_map_{len(properties)}_{hash(str(sorted(properties[0].keys()) if properties else []))}_{map_height}_{map_width_setting}"
+        
+        # Use map dimensions from configuration  
+        with map_placeholder.container():
+            # Add CSS to control container height precisely
+            st.markdown(
+                f"""
+                <style>
+                div[data-testid="stVerticalBlock"] > div:has(iframe[title="streamlit_folium.st_folium"]) {{
+                    height: {map_height}px !important;
+                    min-height: {map_height}px !important;
+                    max-height: {map_height}px !important;
+                    margin-bottom: 0 !important;
+                    padding-bottom: 0 !important;
+                }}
+                iframe[title="streamlit_folium.st_folium"] {{
+                    height: {map_height}px !important;
+                }}
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            if map_width_setting == "container":
+                map_data = st_folium.st_folium(
+                    m, 
+                    use_container_width=True, 
+                    height=map_height,
+                    key=map_key
+                )
+            else:
+                # Use custom width
+                map_data = st_folium.st_folium(
+                    m, 
+                    width=map_width_setting,
+                    height=map_height,
+                    key=map_key
+                )
         
         # Debug: Show current map state (only if data actually changed)
         if st.session_state.get('debug_mode', False):
@@ -893,7 +1005,47 @@ def render_property_map_streamlit(
                     st.write(f"   - West: {bounds['_southWest']['lng']:.6f}")
                     st.session_state.prev_map_bounds = bounds
 
-        # Advanced options button below the map (with reduced spacing)
+        # Color selector directly below the map
+        if advanced_options_enabled:
+            # Get available columns for color selector
+            all_columns = set()
+            for prop in properties_with_geometry:
+                all_columns.update(prop.keys())
+
+            excluded_columns = {
+                "GEOMETRY",
+                "geometry",
+                "id",
+                "ID",
+                "_id",
+                "_conversation_id",
+            }
+            available_columns = sorted(
+                [col for col in all_columns if col not in excluded_columns]
+            )
+            
+            # Define priority fields (will appear first)
+            priority_fields = ["STATUS CONTATO", "HAS NET IMOVEIS AD",'TIPO CONSTRUTIVO','HAS PROJECT']
+            
+            # Create color options with priority fields first, then alphabetical
+            priority_options = [field for field in priority_fields if field in available_columns]
+            remaining_options = [field for field in available_columns if field not in priority_fields]
+            color_options = ["Índice Sequencial"] + priority_options + remaining_options
+            
+            # Set default index based on priority
+            default_index = 0
+            if priority_options:
+                default_index = 1  # First priority field after "Índice Sequencial"
+            
+            st.selectbox(
+                "🎨 Colorir por:",
+                options=color_options,
+                index=default_index,
+                key="advanced_color_by_column",
+                help="Escolha uma coluna para colorir as propriedades",
+            )
+
+        # Advanced options button below the color selector (with reduced spacing)
         if advanced_options_enabled:
             # Add custom CSS to reduce spacing
             st.markdown(
@@ -953,6 +1105,38 @@ def render_property_map_streamlit(
                     key="advanced_map_style",
                     help="Escolha o estilo de visualização do mapa",
                 )
+
+                # Map Dimensions
+                st.subheader("📐 Dimensões do Mapa")
+                dim_col1, dim_col2 = st.columns(2)
+                
+                with dim_col1:
+                    st.slider(
+                        "📏 Altura (px)",
+                        400,
+                        1200,
+                        1000,
+                        50,
+                        key="advanced_map_height",
+                        help="Altura do mapa em pixels",
+                    )
+                
+                with dim_col2:
+                    width_options = {
+                        "container": "Largura do Container",
+                        800: "800px",
+                        1000: "1000px", 
+                        1200: "1200px",
+                        1400: "1400px"
+                    }
+                    st.selectbox(
+                        "📐 Largura",
+                        options=list(width_options.keys()),
+                        format_func=lambda x: width_options[x],
+                        index=4,  # Default to 1400px
+                        key="advanced_map_width",
+                        help="Largura do mapa (container = largura total disponível)",
+                    )
 
                 # Visual Options
                 col1, col2, col3 = st.columns(3)
@@ -1016,36 +1200,6 @@ def render_property_map_streamlit(
                         help="Mostrar informações detalhadas nos popups",
                     )
 
-                # Color-by-column selector
-                all_columns = set()
-                for prop in properties_with_geometry:
-                    all_columns.update(prop.keys())
-
-                excluded_columns = {
-                    "GEOMETRY",
-                    "geometry",
-                    "id",
-                    "ID",
-                    "_id",
-                    "_conversation_id",
-                }
-                available_columns = sorted(
-                    [col for col in all_columns if col not in excluded_columns]
-                )
-                color_options = ["Índice Sequencial"] + available_columns
-                
-                # Set default index based on STATUS CONTATO availability
-                default_index = 0
-                if "STATUS CONTATO" in available_columns:
-                    default_index = color_options.index("STATUS CONTATO")
-
-                st.selectbox(
-                    "🎨 Colorir por:",
-                    options=color_options,
-                    index=default_index,
-                    key="advanced_color_by_column",
-                    help="Escolha uma coluna para colorir as propriedades",
-                )
 
                 # Field Selection
                 col1, col2 = st.columns(2)
@@ -1056,9 +1210,9 @@ def render_property_map_streamlit(
                         "ENDERECO",
                         "AREA TERRENO",
                         "TIPO CONSTRUTIVO",
-                        "AREA CONSTRUCAO",
                         "FRACAO IDEAL",
-                        'STATUS CONTATO',
+                        'HAS NET IMOVEIS AD', 
+                        'NOME PROPRIETARIO PBH',
                     ]
                     st.multiselect(
                         "🏷️ Campos no Tooltip:",
@@ -1072,14 +1226,31 @@ def render_property_map_streamlit(
 
                 with col2:
                     default_popup_fields = [
-                        "ZONA FISCAL",
-                        "QUARTEIRAO",
-                        "LOTE",
                         "INDICE CADASTRAL",
                         "ZONEAMENTO",
                         "ADE",
                         "DESCRICAO ALTIMETRIA",
                         "GRAU TOMBAMENTO",
+                        'NOME PROPRIETARIO PBH',
+                        'DOCUMENTO PROPRIETARIO', 
+                        'IDADE', 
+                        'OBITO PROVAVEL', 
+                        'DATA CONSTRUCAO', 
+                        'DATA VENDA',
+                        'VALOR VENDA',
+                        'VALOR M2 TERRENO',
+                        'DATA APROVACAO',
+                        'USO GERAL',
+                        'QTDE PAVIMENTOS',
+                        'AREA MEDIA UND',
+                        'QTD UND RESIDENCIAL',
+                        'QTD UND NAO RESIDENCIAL',
+                        'DATA COMUNICADO INICIO OBRA',
+                        'NET VALOR',
+                        'NET R$/M2',
+                        'NET ID',
+                        'NET ENDERECO',
+                        'COMPLEMENTO ENDERECO',
                     ]
                     available_popup_options = [
                         col
@@ -1110,6 +1281,8 @@ def render_property_map_streamlit(
                         # Only reload if there are actual changes
                         current_settings = {
                             'map_style': st.session_state.get('advanced_map_style', 'Light'),
+                            'map_height': st.session_state.get('advanced_map_height', 600),
+                            'map_width': st.session_state.get('advanced_map_width', 'container'),
                             'show_markers': st.session_state.get('advanced_show_markers', True),
                             'show_polygons': st.session_state.get('advanced_show_polygons', True),
                             'marker_cluster': st.session_state.get('advanced_marker_cluster', True),

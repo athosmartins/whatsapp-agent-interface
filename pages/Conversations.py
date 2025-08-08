@@ -34,8 +34,9 @@ display_preloader_status()
 
 # Load conversations summary with merged sheets data (optimized for filtering)
 @st.cache_data(ttl=60)  # Cache for 1 minute only to see changes faster
-def load_conversations_with_sheets():
-    return get_conversations_with_sheets_data()
+def load_conversations_with_sheets(force_load_spreadsheet: bool = False):
+    """Load conversations with controlled spreadsheet loading."""
+    return get_conversations_with_sheets_data(force_load_spreadsheet=force_load_spreadsheet)
 
 
 # Load conversation messages (cached per conversation)
@@ -655,6 +656,25 @@ try:
             }
 
     # Filter function removed - using widget values directly
+
+    # Load Spreadsheet button (always visible)
+    if st.sidebar.button("📥 Load Spreadsheet", help="Refresh all conversations with current spreadsheet data"):
+        try:
+            with st.spinner("🔄 Loading fresh spreadsheet data for all conversations..."):
+                # Force reload spreadsheet data
+                st.cache_data.clear()  # Clear cache to force fresh load
+                fresh_df = load_conversations_with_sheets(force_load_spreadsheet=True)
+                
+                # The fresh_df is already being used by the page since load_conversations_with_sheets is cached
+                st.sidebar.success("✅ All conversations updated with current spreadsheet data!")
+                st.rerun()
+                
+        except Exception as e:
+            st.sidebar.error(f"❌ Error loading spreadsheet data: {e}")
+            if DEBUG:
+                import traceback
+                st.sidebar.write("**Full error traceback:**")
+                st.sidebar.code(traceback.format_exc())
 
     if DEBUG:
         st.sidebar.subheader("Debug Info")

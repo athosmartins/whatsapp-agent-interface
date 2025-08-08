@@ -15,7 +15,8 @@ from config import (
     HEX_PROJECT_ID_MAIS_TELEFONES,
     HEX_PROJECT_ID_PESSOAS_REFERENCIA,
     HEX_PROJECT_ID_VOXUY,
-    HEX_API_TOKEN
+    HEX_API_TOKEN,
+    HEX_PROJECT_ID_OUTREACH
 )
 
 
@@ -95,6 +96,16 @@ HEX_CONFIGS = {
         "success_message": "Voxuy",
         "session_key": "voxuy_last_run_url",
         "link_text": "Abrir Voxuy no Hex"
+    },
+    "outreach_databasee": {
+        "project_id": HEX_PROJECT_ID_OUTREACH,
+        "input_params": lambda df, funnel="mega_data_set": {
+            "api_input": df.to_csv(index=False)
+        },
+        "button_text": "📣 Cadastrar na Régua de Contatos",
+        "success_message": "Régua de Contatos",
+        "session_key": "outreach_last_run_url",
+        "link_text": "Abrir Régua de Contatos no Hex"
     }
 }
 
@@ -107,6 +118,9 @@ def render_hex_dropdown_interface(filtered_df, **kwargs):
         filtered_df: The DataFrame to send
         **kwargs: Additional parameters (e.g., funnel for Voxuy)
     """
+    print(f"[HEX_DEBUG] render_hex_dropdown_interface called with DF shape: {filtered_df.shape}")
+    print(f"[HEX_DEBUG] kwargs: {kwargs}")
+    
     if not requests:
         st.warning("⚠️ Biblioteca 'requests' não disponível. Execute: pip install requests")
         return
@@ -139,31 +153,43 @@ def render_hex_dropdown_interface(filtered_df, **kwargs):
         apply_hex_button_style()
         st.markdown('<div class="hex-button">', unsafe_allow_html=True)
         
-        if st.button("🚀 Executar Ação"):
+        execute_button_clicked = st.button("🚀 Executar Ação", key="hex_execute_button")
+        
+        if execute_button_clicked:
+            print(f"\n🚀 [HEX_DEBUG] ===== BUTTON CLICKED! =====")
+            print(f"🚀 [HEX_DEBUG] Selected action: {selected_action}")
+            st.success(f"🚀 Button clicked! Action: {selected_action}")
             config = HEX_CONFIGS[selected_action]
+            print(f"[HEX_DEBUG] Config: {config['button_text']}")
+            print(f"[HEX_DEBUG] Filtered DF shape: {filtered_df.shape}")
             
             with st.spinner(f"Enviando dados para {config['success_message']}..."):
-                # Generate input parameters
-                if selected_action == "mandar_voxuy":
-                    input_params = config["input_params"](filtered_df, **kwargs)
-                else:
-                    input_params = config["input_params"](filtered_df)
-                
-                result = send_dataframe_to_hex_with_params(
-                    filtered_df,
-                    project_id=config["project_id"],
-                    input_params=input_params
-                )
+                try:
+                    # Generate input parameters
+                    if selected_action == "mandar_voxuy":
+                        input_params = config["input_params"](filtered_df, **kwargs)
+                    else:
+                        input_params = config["input_params"](filtered_df)
+                    
+                    print(f"[HEX_DEBUG] Input params keys: {list(input_params.keys())}")
+                    
+                    result = send_dataframe_to_hex_with_params(
+                        filtered_df,
+                        project_id=config["project_id"],
+                        input_params=input_params
+                    )
+                    print(f"[HEX_DEBUG] API result: {result}")
+                    
+                except Exception as e:
+                    print(f"[HEX_DEBUG] Exception during execution: {e}")
+                    st.error(f"❌ Erro durante a execução: {e}")
+                    result = {"success": False, "error": str(e)}
                 
                 if result["success"]:
                     st.success(f"✅ Dados enviados com sucesso para {config['success_message']}!")
-                    st.info(f"🔗 Visualizar execução: {result['run_url']}")
                     
-                    # Store in session state
+                    # Store in session state for permanent display
                     st.session_state[config["session_key"]] = result["run_url"]
-                    
-                    # Show clickable link
-                    st.markdown(f"[🚀 {config['link_text']}]({result['run_url']})")
                     
                 else:
                     st.error(f"❌ Erro ao enviar dados para {config['success_message']}: {result['error']}")
@@ -178,6 +204,22 @@ def render_hex_dropdown_interface(filtered_df, **kwargs):
                             st.write(f"- Additional params: {kwargs}")
         
         st.markdown('</div>', unsafe_allow_html=True)
+    
+    # PERMANENT URL DISPLAY - Always show stored URLs for all HEX actions
+    st.markdown("---")
+    st.subheader("📋 URLs das Execuções HEX")
+    
+    has_any_url = False
+    for action_key, config in HEX_CONFIGS.items():
+        stored_url = st.session_state.get(config["session_key"])
+        if stored_url:
+            has_any_url = True
+            st.markdown(f"**{config['success_message']}:**")
+            st.markdown(f"[🚀 {config['link_text']}]({stored_url})")
+            st.code(stored_url, language=None)
+    
+    if not has_any_url:
+        st.info("💡 Nenhuma execução HEX realizada ainda. Execute uma ação acima para ver as URLs aqui.")
 
 def render_hex_button(filtered_df, config_key, **kwargs):
     """

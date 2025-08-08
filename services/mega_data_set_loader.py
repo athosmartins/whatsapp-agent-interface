@@ -488,10 +488,10 @@ def get_properties_for_phone(phone_number: str) -> List[Dict]:
                 properties = find_properties_by_documento(test_cpf)
                 return properties
         
-        # Step 1: Get CPF from spreadsheet using phone number
+        # Step 1: Get CPF from spreadsheet using phone number (controlled loading)
         from services.spreadsheet import get_sheet_data
         
-        sheet_data = get_sheet_data()
+        sheet_data = get_sheet_data()  # Uses session-controlled loading
         if not sheet_data:
             print("No spreadsheet data available")
             return []

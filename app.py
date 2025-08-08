@@ -69,6 +69,30 @@ if "master_df" not in st.session_state:
 # Work on the master_df
 df = st.session_state.master_df.copy()
 
+# Load Spreadsheet button 
+if st.sidebar.button("📥 Load Spreadsheet", help="Force fresh spreadsheet data load for other pages (Conversations, Processor)"):
+    try:
+        with st.spinner("🔄 Resetting spreadsheet cache for fresh data load..."):
+            # Reset spreadsheet loaded flag so other pages will reload fresh data
+            st.session_state['spreadsheet_loaded'] = False
+            
+            # Clear cached sheet data
+            sheet_cache_keys = [key for key in st.session_state.keys() if key.startswith('cached_sheet_data_')]
+            for key in sheet_cache_keys:
+                del st.session_state[key]
+            
+            # Clear Streamlit cache for pages that use spreadsheet data
+            st.cache_data.clear()
+            
+            st.sidebar.success("✅ Spreadsheet cache reset! Other pages will load fresh data.")
+            
+    except Exception as e:
+        st.sidebar.error(f"❌ Error resetting spreadsheet cache: {e}")
+        if DEBUG:
+            import traceback
+            st.sidebar.write("**Full error traceback:**")
+            st.sidebar.code(traceback.format_exc())
+
 # Debug info
 if DEBUG:
     st.sidebar.subheader("Debug Info")

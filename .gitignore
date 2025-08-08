@@ -37,3 +37,4 @@ secrets.toml
 .env.production
 voxuy_token.txt
 api_keys.txt
+credentials.json

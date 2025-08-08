@@ -88,6 +88,10 @@ def send_whatsapp_message(
     
     # Clean phone number (remove @ and domain if present)
     clean_phone = phone_number.split('@')[0] if '@' in phone_number else phone_number
+
+    # Check if the plus sign is already there to avoid duplicates
+    if not clean_phone.startswith('+'):
+        clean_phone = '+' + clean_phone
     
     client_data = {
         "apiToken": VOXUY_API_TOKEN,
@@ -96,7 +100,7 @@ def send_whatsapp_message(
         "status": 0,        # Custom event
         "clientName": client_name,
         "clientPhoneNumber": clean_phone,
-        "customEvent": "40419",  # Custom event ID
+        "customEvent": "44345",  # Custom event ID
         "metadata": {
             "mensagem_customizada": message_content,  # Message content goes here as a variable
         }

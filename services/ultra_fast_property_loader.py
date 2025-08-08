@@ -98,9 +98,9 @@ class UltraFastPropertyLoader:
         start_time = time.time()
         
         try:
-            # Step 1: Load and process Google Sheets data with vectorized operations
+            # Step 1: Load and process Google Sheets data with vectorized operations (controlled loading)
             from services.spreadsheet import get_sheet_data
-            sheet_data = get_sheet_data()
+            sheet_data = get_sheet_data()  # Uses session-controlled loading
             
             if not sheet_data or len(sheet_data) < 2:
                 print("❌ No Google Sheets data available")

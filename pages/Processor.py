@@ -29,7 +29,8 @@ from services.background_operations import (
     queue_sync_operation,
     queue_archive_operation,
     render_operations_sidebar,
-    get_running_operations
+    get_running_operations,
+    background_manager
 )
 from services.mega_data_set_loader import (
     get_properties_for_phone,
@@ -685,6 +686,14 @@ try:
         auto_load_conversation = query_params["conversation_id"]
         if DEBUG:
             st.info(f"🔗 Auto-loading conversation: {auto_load_conversation}")
+    elif "_preserved_conversation_id" in st.session_state:
+        # Restore conversation context after widget-triggered rerun
+        auto_load_conversation = st.session_state["_preserved_conversation_id"]
+        st.query_params["conversation_id"] = auto_load_conversation
+        if DEBUG:
+            st.info(f"🔄 Restored conversation context: {auto_load_conversation}")
+        # Clear the preserved context after restoration
+        del st.session_state["_preserved_conversation_id"]
 except:
     pass
 
@@ -742,9 +751,10 @@ DEV = True  # Set based on your environment
 
 # ─── DATA LOADER ────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def load_data():
-    """Load the WhatsApp conversations DataFrame."""
-    return get_dataframe()
+def load_data(force_load_spreadsheet: bool = False):
+    """Load the WhatsApp conversations DataFrame with Google Sheets data - same as Conversations page."""
+    from loaders.db_loader import get_conversations_with_sheets_data
+    return get_conversations_with_sheets_data(force_load_spreadsheet=force_load_spreadsheet)
 
 
 # ─── CONVERSATION DISPLAY HELPER FUNCTIONS ─────────────────────────────────
@@ -934,11 +944,11 @@ def initialize_session_state():
                 "status_manual", ""
             ),  # Maps to intencao field
             "pagamento": conversation_data.get("pagamento", ""),
-            "resposta": conversation_data.get("OBS", ""),  # Maps to resposta field
+            "resposta": "",  # Resposta field doesn't exist in spreadsheet, keep empty
             "Razao": conversation_data.get("standby_reason", ""),
             "acoes_urblink": parse_spreadsheet_list(conversation_data.get("Ações", "")),
             "status_urblink": conversation_data.get("status_manual_urb.link", ""),
-            "obs": conversation_data.get("OBS_urb.link", ""),  # Additional observations
+            "obs": conversation_data.get("OBS", ""),  # Maps OBS column to obs field - FIXED!
             "stakeholder": parse_spreadsheet_bool(
                 conversation_data.get("stakeholder", False)
             ),
@@ -1239,6 +1249,18 @@ def compare_values(original, current):
         return False
     elif not isinstance(original, list) and isinstance(current, list):
         return False
+    # Handle boolean comparison properly
+    elif isinstance(original, bool) and isinstance(current, bool):
+        return original == current
+    elif isinstance(original, bool) or isinstance(current, bool):
+        # Convert both to boolean for comparison
+        def to_bool(value):
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, str):
+                return value.upper() in ["TRUE", "1", "YES", "ON"]
+            return bool(value)
+        return to_bool(original) == to_bool(current)
     else:
         return str(original) == str(current)
 
@@ -1264,17 +1286,58 @@ if ("processor_navigation_context" in st.session_state and
     # Load the full data to find the specific conversation
     full_df = load_data()  # This loads all conversations
     
-    # Check which column exists and search appropriately
+    # Check which column exists and search appropriately, using phone matching for better results
+    current_conversation_match = pd.DataFrame()
+    
+    # Try exact conversation_id match first
     if "conversation_id" in full_df.columns:
         current_conversation_match = full_df[
             full_df["conversation_id"] == current_url_conversation_id
         ]
-    elif "whatsapp_number" in full_df.columns:
+    
+    # If no exact match found and it looks like a phone number, try phone matching
+    if current_conversation_match.empty and ("@s.whatsapp.net" in current_url_conversation_id or current_url_conversation_id.isdigit()):
+        # Extract phone number and try phone matching
+        target_phone = current_url_conversation_id.split('@')[0] if '@' in current_url_conversation_id else current_url_conversation_id
+        
+        # DEBUG: Show phone matching process
+        print(f"🔍 PHONE MATCHING DEBUG:")
+        print(f"   - Target phone: {target_phone}")
+        
+        # Try matching against whatsapp_number column with variants
+        if "whatsapp_number" in full_df.columns:
+            from services.phone_utils import generate_phone_variants, clean_phone_for_matching
+            variants = generate_phone_variants(target_phone)
+            print(f"   - Generated variants: {variants}")
+            
+            for variant in variants:
+                print(f"   - Trying variant: {variant}")
+                matches = full_df[full_df["whatsapp_number"].apply(
+                    lambda x: clean_phone_for_matching(str(x)) == clean_phone_for_matching(variant)
+                )]
+                if not matches.empty:
+                    print(f"   - ✅ MATCH FOUND with variant: {variant}")
+                    current_conversation_match = matches
+                    break
+                else:
+                    print(f"   - ❌ No match for variant: {variant}")
+            
+            if current_conversation_match.empty:
+                print(f"   - ❌ NO MATCHES FOUND for any variant")
+                # Show what phone numbers are actually available for comparison
+                available_phones = full_df["whatsapp_number"].head(10).tolist()
+                print(f"   - Available phones (first 10): {available_phones}")
+                # Show cleaned versions for comparison
+                cleaned_available = [clean_phone_for_matching(str(p)) for p in available_phones]
+                print(f"   - Cleaned available: {cleaned_available}")
+                cleaned_variants = [clean_phone_for_matching(v) for v in variants]
+                print(f"   - Cleaned variants: {cleaned_variants}")
+    
+    # Fallback: try exact whatsapp_number match if exists
+    if current_conversation_match.empty and "whatsapp_number" in full_df.columns:
         current_conversation_match = full_df[
             full_df["whatsapp_number"] == current_url_conversation_id
         ]
-    else:
-        current_conversation_match = pd.DataFrame()  # Empty if no matching column
     
     if not current_conversation_match.empty:
         # Replace the master_df with just this conversation for display
@@ -1698,8 +1761,13 @@ with nav_next_col:
     )
 
 # ─── SYNC INITIALIZATION ────────────────────────────────────────────────────
-# Initialize auto-sync for the current conversation
-conversation_id = row.get("conversation_id", row.get("whatsapp_number", ""))
+# Clear old sync operations on fresh session starts
+if "session_initialized" not in st.session_state:
+    st.session_state.recent_sync_operations = []
+    st.session_state.session_initialized = True
+
+# Initialize auto-sync for the current conversation with fallback to URL
+conversation_id = row.get("conversation_id", row.get("whatsapp_number", "")) or st.query_params.get("conversation_id", "")
 
 # Store current conversation ID in session state
 st.session_state.current_conversation_id = conversation_id
@@ -1832,9 +1900,9 @@ with chat_container.container():
                             messages.append(
                                 {
                                     "sender": sender,
-                                    "msg": msg_row["message_text"],
+                                    "msg": msg_row.get("message_text", ""),
                                     "ts": datetime.fromtimestamp(
-                                        msg_row["timestamp"]
+                                        msg_row.get("timestamp", 0)
                                     ).strftime("%d/%m/%Y %H:%M"),
                                 }
                             )
@@ -1869,10 +1937,10 @@ with chat_container.container():
         if (
             not messages
             and "conversation_history" in row.index
-            and pd.notna(row["conversation_history"])
-            and row["conversation_history"]
+            and pd.notna(row.get("conversation_history"))
+            and row.get("conversation_history")
         ):
-            messages = parse_chat(row["conversation_history"])
+            messages = parse_chat(row.get("conversation_history", ""))
         elif not messages:
             # No conversation history available
             messages = []
@@ -2067,12 +2135,15 @@ with classification_container.container():
     
     with racional_col:
         # Racional in a compact yellow box
+        # Get the AI reasoning from the correct column - check multiple possible column names
+        ai_reasoning = row.get('Razao', row.get('standby_reason', row.get('razao_standby', '')))
+        
         st.markdown(
             f"""
         <div style="margin-top: 25px;">
             <strong>📋 Racional usado pela AI classificadora:</strong><br>
             <div class='reason-box' style="margin-top: 5px; font-size: 0.85rem; max-height: 100px; overflow-y: auto;">
-                {row['Razao']}
+                {ai_reasoning}
             </div>
         </div>
         """,
@@ -2093,8 +2164,9 @@ with classification_container.container():
     left_col, right_col = st.columns(2)
     
     with left_col:
-        # Classificação
-        current_classificacao = row.get("classificacao", "")
+        # Classificação - Fix field mapping to use correct spreadsheet column
+        current_classificacao = row.get("Classificação do dono do número", "") or row.get("classificacao", "")
+        print(f"🔍 TERMINAL DEBUG: Widget loading - classificacao from row: {repr(current_classificacao)}")  # Terminal debug
         classificacao_index = (
             CLASSIFICACAO_OPTS.index(current_classificacao)
             if current_classificacao in CLASSIFICACAO_OPTS
@@ -2110,8 +2182,8 @@ with classification_container.container():
             ),
         )
     
-        # Intenção
-        current_intencao = row.get("intencao", "")
+        # Intenção - Fix field mapping to use correct spreadsheet column
+        current_intencao = row.get("status_manual", "") or row.get("intencao", "")
         intencao_index = (
             INTENCAO_OPTS.index(current_intencao)
             if current_intencao in INTENCAO_OPTS
@@ -2247,7 +2319,7 @@ with classification_container.container():
         )
     
     with right_col:
-        # Resposta
+        # Resposta - check both possible column names 
         current_resposta = row.get("resposta", "")
         resposta_input = st.text_area(
             "✏️ Resposta",
@@ -2308,8 +2380,58 @@ with classification_container.container():
             else:
                 st.warning("⚠️ Por favor, digite uma mensagem antes de enviar.")
     
-        # OBS
-        current_obs = row.get("obs", "")
+        # OBS - check both possible column names (obs from database, OBS from spreadsheet)
+        current_obs = row.get("obs", row.get("OBS", ""))
+        
+        # DEBUG: Show comprehensive field values comparison - original vs current
+        if DEV and DEBUG:
+            with st.expander("🔍 Debug - All Field Values (Original vs Current)", expanded=True):
+                current_row = st.session_state.master_df.iloc[idx]
+                
+                # All fields we want to show in debug
+                all_fields = {
+                    "classificacao": "Classificação",
+                    "intencao": "Intenção", 
+                    "acoes_urblink": "Ações",
+                    "status_urblink": "Status Urblink",
+                    "pagamento": "Pagamento",
+                    "percepcao_valor_esperado": "Percepção Valor",
+                    "razao_standby": "Razão Standby",
+                    "resposta": "Resposta",
+                    "obs": "Observações",
+                    "stakeholder": "Stakeholder",
+                    "intermediador": "Intermediador", 
+                    "inventario_flag": "Inventário",
+                    "standby": "Standby",
+                    "followup_date": "Follow-up",
+                }
+                
+                if idx in st.session_state.original_values:
+                    original = st.session_state.original_values[idx]
+                    
+                    st.write("**Field-by-field comparison:**")
+                    for field, display_name in all_fields.items():
+                        orig_val = original.get(field, "NOT_STORED")
+                        curr_val = current_row.get(field, "NOT_FOUND")
+                        
+                        # Check if values match
+                        if field in original:
+                            matches = compare_values(orig_val, curr_val)
+                            status = "✅" if matches else "❌"
+                        else:
+                            status = "❓"
+                        
+                        st.write(f"**{display_name} ({field}):** {status}")
+                        st.write(f"  📋 Original: `{repr(orig_val)}` ({type(orig_val).__name__})")
+                        st.write(f"  📝 Current:  `{repr(curr_val)}` ({type(curr_val).__name__})")
+                        st.write("")  # Empty line for spacing
+                else:
+                    st.warning("⚠️ No original values stored for this conversation")
+                    st.write("**Current values only:**")
+                    for field, display_name in all_fields.items():
+                        curr_val = current_row.get(field, "NOT_FOUND")
+                        st.write(f"**{display_name} ({field}):**")
+                        st.write(f"  📝 Current: `{repr(curr_val)}` ({type(curr_val).__name__})")
     
         def on_obs_change():
             new_value = st.session_state[f"obs_input_{idx}"]
@@ -2440,15 +2562,26 @@ with classification_container.container():
                 followup_col1, followup_col2 = st.columns([1, 1])
     
                 with followup_col1:
+                    def on_followup_amount_change():
+                        # Preserve conversation context during number input changes
+                        if "conversation_id" in st.query_params:
+                            st.session_state["_preserved_conversation_id"] = st.query_params["conversation_id"]
+                    
                     followup_amount = st.number_input(
                         "Quantidade",
                         min_value=1,
                         max_value=365,
                         value=st.session_state.get(f"followup_amount_{idx}", 1),
                         key=f"followup_amount_{idx}",
+                        on_change=on_followup_amount_change,
                     )
     
                 with followup_col2:
+                    def on_followup_unit_change():
+                        # Preserve conversation context during selectbox changes
+                        if "conversation_id" in st.query_params:
+                            st.session_state["_preserved_conversation_id"] = st.query_params["conversation_id"]
+                    
                     followup_unit = st.selectbox(
                         "Período",
                         options=["dias", "semanas", "meses"],
@@ -2456,6 +2589,7 @@ with classification_container.container():
                             st.session_state.get(f"followup_unit_{idx}", "dias")
                         ),
                         key=f"followup_unit_{idx}",
+                        on_change=on_followup_unit_change,
                     )
     
                 # Calculate automatically when inputs change
@@ -2542,74 +2676,76 @@ with classification_container.container():
         if initialization_key in st.session_state:
             del st.session_state[initialization_key]
     
-        # Show modifications status
+        # Show modifications status - compare against original values stored at session start
+        changes = {}
+        
         if idx in st.session_state.original_values:
             original = st.session_state.original_values[idx]
-            current = st.session_state.master_df.iloc[idx].to_dict()
+            current_row = st.session_state.master_df.iloc[idx]
             
-            # TEMPORARY DEBUG: Identify why fields are being detected as changed  
-            if DEV and DEBUG:  # Only show in debug mode now
-                changes = {}
-                for field in current.keys():
-                    if field in original:
-                        if str(original[field]) != str(current[field]):  # Use string comparison for consistency
-                            changes[field] = {
-                                'original': original[field], 
-                                'current': current[field],
-                                'original_type': type(original[field]),
-                                'current_type': type(current[field])
-                            }
-                
-                if changes:
-                    with st.expander(f"🐛 Debug: Changes detected ({len(changes)} fields)", expanded=False):
-                        for field, change in changes.items():
-                            st.write(f"**{field}:** `{change['original']}` ({change['original_type'].__name__}) → `{change['current']}` ({change['current_type'].__name__})")
-        
-            # Calculate modifications count properly
-            changes = {}
-            for field in current.keys():
+            # Only check fields that are synced to spreadsheet (exclude resposta and other non-synced fields)
+            synced_fields = {
+                "classificacao", "intencao", "acoes_urblink", "status_urblink", 
+                "pagamento", "percepcao_valor_esperado", "razao_standby", "obs", 
+                "stakeholder", "intermediador", "inventario_flag", "standby", "followup_date"
+            }
+            
+            for field in synced_fields:
                 if field in original:
-                    # Handle None vs "" and type differences properly
+                    curr_val = current_row.get(field, "")
                     orig_val = original[field]
-                    curr_val = current[field]
                     
-                    # Normalize None and empty string/array
-                    def is_empty_value(val):
-                        if val is None:
-                            return True
-                        if isinstance(val, str) and val == "":
-                            return True
-                        try:
-                            import numpy as np
-                            if isinstance(val, np.ndarray):
-                                return val.size == 0
-                        except ImportError:
-                            pass
-                        if hasattr(val, '__len__') and not isinstance(val, str):
-                            return len(val) == 0
-                        try:
-                            return pd.isna(val)
-                        except:
-                            return False
-                    
-                    if is_empty_value(orig_val):
-                        orig_val = ""
-                    if is_empty_value(curr_val):
-                        curr_val = ""
-                    
-                    # Convert to string for comparison to handle type differences
-                    if str(orig_val) != str(curr_val):
-                        changes[field] = True
+                    # Use the same comparison logic as the compare_values function for consistency
+                    if not compare_values(orig_val, curr_val):
+                        changes[field] = {
+                            'original': orig_val,
+                            'current': curr_val
+                        }
+        
+        # Show pending modifications 
+        if changes:
+            # Create field names mapping for display - ONLY for fields that sync to spreadsheet
+            field_display_names = {
+                "classificacao": "Classificação",
+                "intencao": "Intenção", 
+                "acoes_urblink": "Ações",
+                "status_urblink": "Status Urblink",
+                "pagamento": "Pagamento",
+                "percepcao_valor_esperado": "Percepção Valor",
+                "razao_standby": "Razão Standby",
+                "obs": "Observações",
+                "stakeholder": "Stakeholder",
+                "intermediador": "Intermediador", 
+                "inventario_flag": "Inventário",
+                "standby": "Standby",
+                "followup_date": "Follow-up",
+            }
             
-            if changes:
-                st.info(f"🔄 {len(changes)} modificações pendentes")
-            else:
-                st.success("✅ Sem modificações pendentes")
+            # Get display names for changed fields
+            changed_field_names = []
+            for field in changes.keys():
+                display_name = field_display_names.get(field, field.title())
+                changed_field_names.append(display_name)
+            
+            # Show the list of changed fields
+            fields_list = ", ".join(changed_field_names)
+            st.info(f"🔄 **Modificações pendentes:** {fields_list}")
+            
+            # Debug information showing field changes
+            if DEV and DEBUG:
+                with st.expander("🔍 Debug - Field Changes", expanded=True):
+                    for field, values in changes.items():
+                        display_name = field_display_names.get(field, field.title())
+                        st.write(f"**{display_name} ({field}):**")
+                        st.write(f"  - Original: `{repr(values['original'])}` ({type(values['original']).__name__})")
+                        st.write(f"  - Current: `{repr(values['current'])}` ({type(values['current']).__name__})")
+        else:
+            st.success("✅ Sem modificações pendentes")
 
 # ─── PRIORITY 3: CONTACT INFO (Load last, slower due to images) ─────────────────
 with contact_container.container():
     # ─── CONTACT SECTION ────────────────────────────────────────────────────────
-    hl_words = build_highlights(row["display_name"], row["expected_name"])
+    hl_words = build_highlights(row.get("display_name", ""), row.get("expected_name", ""))
 
     # Create contact info HTML with fixed height
     picture = row.get("PictureUrl")
@@ -2651,12 +2787,12 @@ with contact_container.container():
         print(f"🖼️ Image Debug: {picture_debug}")
 
     display_name = (
-        highlight(row["display_name"], hl_words)
+        highlight(row.get("display_name", ""), hl_words)
         if HIGHLIGHT_ENABLE
-        else row["display_name"]
+        else row.get("display_name", "")
     )
-    expected_name = highlight(row["expected_name"], hl_words)
-    familiares_list = parse_familiares_grouped(row["familiares"])
+    expected_name = highlight(row.get("expected_name", ""), hl_words)
+    familiares_list = parse_familiares_grouped(row.get("familiares", ""))
     age = row.get("IDADE")
     age_text = ""
     if pd.notna(age) and str(age).strip() and str(age).strip() != "":
@@ -2689,9 +2825,10 @@ with contact_container.container():
         else:
             picture_proxied = picture
             
-        # Create unique IDs for this image
-        img_id = f"profile_img_{conversation_id.replace('@', '').replace('+', '').replace('-', '')}"
-        fallback_id = f"fallback_{conversation_id.replace('@', '').replace('+', '').replace('-', '')}"
+        # Create unique IDs for this image (with null check)
+        safe_conversation_id = conversation_id if conversation_id else "unknown"
+        img_id = f"profile_img_{safe_conversation_id.replace('@', '').replace('+', '').replace('-', '')}"
+        fallback_id = f"fallback_{safe_conversation_id.replace('@', '').replace('+', '').replace('-', '')}"
         
         # Simple image with fallback - minimal JavaScript to avoid f-string issues
         picture_html = f'''<img id="{img_id}" src="{original_picture}" 
@@ -2756,10 +2893,10 @@ with contact_container.container():
             clean_phone = clean_phone_for_matching(phone_number)
             debug_info["clean_phone"] = clean_phone
 
-            # Step 2: Debug spreadsheet mapping
+            # Step 2: Debug spreadsheet mapping (controlled loading)
             from services.spreadsheet import get_sheet_data
 
-            sheet_data = get_sheet_data()
+            sheet_data = get_sheet_data()  # Uses session-controlled loading
 
             if sheet_data:
                 headers = sheet_data[0] if sheet_data else []
@@ -3258,8 +3395,8 @@ with right_col:
 
 # ─── NAVIGATION BOTTOM ──────────────────────────────────────────────────────
 st.markdown("---")
-bot_prev_col, dashboard_col, reset_col, sync_col, bot_next_col = st.columns(
-    [1, 1, 1, 1, 1]
+bot_prev_col, dashboard_col, reset_col, sheet_reset_col, load_sheet_col, sync_col, bot_next_col = st.columns(
+    [1, 1, 1, 1, 1, 1, 1]
 )
 with bot_prev_col:
     # Use same navigation context logic as top buttons
@@ -3295,6 +3432,332 @@ with reset_col:
         reset_to_original(idx)
         st.success("✅ Valores originais da AI carregados!")
         st.rerun()
+
+with sheet_reset_col:
+    if st.button("📄 Sheet Reset", key="bottom_sheet_reset", use_container_width=True):
+        print("🔍 TERMINAL DEBUG: Sheet Reset button clicked!")  # Terminal debug
+        st.write("🔍 DEBUG: Sheet Reset button clicked!")  # Debug line
+        
+        # Get current conversation phone number for spreadsheet lookup
+        current_row = st.session_state.master_df.iloc[idx]
+        print(f"🔍 TERMINAL DEBUG: Current row keys: {list(current_row.keys()) if hasattr(current_row, 'keys') else 'No keys'}")  # Terminal debug
+        
+        # Debug the entire row to see what phone number fields exist
+        if DEV and DEBUG:
+            st.write("🔍 Debug Sheet Reset - Current row data:")
+            phone_related_cols = [col for col in current_row.index if any(keyword in col.lower() for keyword in ['phone', 'whats', 'celular', 'numero'])]
+            st.write(f"**Phone-related columns:** {phone_related_cols}")
+            for col in phone_related_cols:
+                st.write(f"  - {col}: {repr(current_row.get(col))}")
+            
+            # Also check conversation_id which might have the phone
+            conversation_id = current_row.get("conversation_id", "")
+            st.write(f"**conversation_id:** {repr(conversation_id)}")
+        
+        # Try multiple possible phone number columns (based on actual database structure)
+        raw_whatsapp_number = ""
+        phone_sources = [
+            current_row.get("whatsapp_number", ""),  # This is the main column in database
+            current_row.get("Phone number", ""),     # This might exist from spreadsheet sync
+            current_row.get("phone", ""),
+            current_row.get("phone_number", ""),     # Add this as it's in the merged data
+            current_row.get("celular", ""),
+            current_row.get("conversation_id", ""),  # Less likely to exist in dataframe
+        ]
+        
+        print(f"🔍 TERMINAL DEBUG: Phone sources: {phone_sources}")  # Terminal debug
+        st.write(f"🔍 DEBUG: Phone sources: {phone_sources}")  # Debug line
+        
+        # Use the first non-empty phone source
+        for source in phone_sources:
+            if source and str(source).strip():
+                raw_whatsapp_number = str(source).strip()
+                break
+        
+        print(f"🔍 TERMINAL DEBUG: Selected phone: {repr(raw_whatsapp_number)}")  # Terminal debug
+        st.write(f"🔍 DEBUG: Selected phone: {repr(raw_whatsapp_number)}")  # Debug line
+        
+        # Debug phone number extraction
+        if DEV and DEBUG:
+            st.write(f"🔍 Debug Sheet Reset - Selected phone: {repr(raw_whatsapp_number)}")
+        
+        # Clean phone number: remove @s.whatsapp.net and format properly
+        if raw_whatsapp_number:
+            whatsapp_number = raw_whatsapp_number.split('@')[0] if '@' in raw_whatsapp_number else raw_whatsapp_number
+            
+            # Remove any non-digit characters and ensure we have a phone number
+            clean_number = ''.join(filter(str.isdigit, whatsapp_number))
+            
+            if DEV and DEBUG:
+                st.write(f"🔍 Debug Sheet Reset - Clean number: {repr(clean_number)}")
+            
+            if not clean_number:
+                print(f"🔍 TERMINAL DEBUG: No valid phone number found")  # Terminal debug
+                st.error("❌ No valid phone number found for this conversation")
+            else:
+                print(f"🔍 TERMINAL DEBUG: Clean number: {repr(clean_number)}")  # Terminal debug
+                try:
+                    # Import db loader function that handles spreadsheet data
+                    from loaders.db_loader import get_conversations_with_sheets_data
+                    
+                    # Fetch fresh data from spreadsheet with force load for Sheet Reset
+                    with st.spinner("🔄 Loading spreadsheet data..."):
+                        print(f"🔍 TERMINAL DEBUG: Loading spreadsheet data (Sheet Reset - force load)...")  # Terminal debug
+                        fresh_df = get_conversations_with_sheets_data(force_load_spreadsheet=True)
+                    
+                    print(f"🔍 TERMINAL DEBUG: Spreadsheet loaded: {len(fresh_df)} rows")  # Terminal debug
+                    if DEV and DEBUG:
+                        st.write(f"🔍 Debug Sheet Reset - Spreadsheet loaded: {len(fresh_df)} rows")
+                    
+                    # Find the phone column (look for 'celular', 'phone', etc.)
+                    phone_column = None
+                    for col in fresh_df.columns:
+                        if col is not None:
+                            col_lower = str(col).lower()
+                            if any(term in col_lower for term in ['celular', 'phone', 'telefone', 'whatsapp', 'contato']):
+                                phone_column = col
+                                break
+                    
+                    if phone_column is None:
+                        st.error("❌ No phone column found in spreadsheet")
+                        if DEV and DEBUG:
+                            st.write(f"Available columns: {list(fresh_df.columns)}")
+                            st.write("Looking for columns containing: 'celular', 'phone', 'telefone', 'whatsapp', 'contato'")
+                    else:
+                        if DEV and DEBUG:
+                            st.write(f"🔍 Debug Sheet Reset - Using phone column: {repr(phone_column)}")
+                        # Create multiple phone formats to try matching (based on actual spreadsheet format)
+                        phone_formats = [
+                            clean_number,        # 553199821610 (matches spreadsheet format!)
+                            f"+{clean_number}",  # +553199821610
+                            clean_number[2:] if clean_number.startswith('55') and len(clean_number) > 2 else clean_number,  # 3199821610
+                            f"+55{clean_number}" if not clean_number.startswith('55') else f"+{clean_number}",
+                        ]
+                        
+                        # Remove duplicates while preserving order
+                        phone_formats = list(dict.fromkeys(phone_formats))
+                        
+                        if DEV and DEBUG:
+                            st.write(f"🔍 Debug Sheet Reset - Phone formats to try: {phone_formats}")
+                        
+                        # Look for any matching phone format - try exact matching first, then flexible matching
+                        matching_rows = fresh_df[fresh_df[phone_column].astype(str).isin([str(f) for f in phone_formats])]
+                        
+                        # If no exact match, try flexible matching using centralized phone utilities
+                        if matching_rows.empty:
+                            import pandas as pd
+                            from services.phone_utils import clean_phone_for_matching
+                            
+                            # Use sophisticated phone matching that handles format differences
+                            target_normalized = clean_phone_for_matching(raw_whatsapp_number)
+                            
+                            # Find rows where normalized phones match
+                            matching_rows = fresh_df[fresh_df[phone_column].apply(
+                                lambda x: clean_phone_for_matching(x) == target_normalized
+                            )]
+                            
+                            if DEV and DEBUG:
+                                st.write(f"🔍 Debug Sheet Reset - Flexible matching attempted")
+                                st.write(f"Target normalized: {repr(target_normalized)}")
+                                # Show a few examples of normalized spreadsheet phones
+                                sample_cleaned = []
+                                for phone in fresh_df[phone_column].head(10):
+                                    cleaned = clean_phone_for_matching(phone)
+                                    sample_cleaned.append(f"{repr(phone)} -> {repr(cleaned)}")
+                                st.write("Sample normalized phones:")
+                                for example in sample_cleaned[:5]:
+                                    st.write(f"  {example}")
+                                st.write(f"Flexible match result: {len(matching_rows)} rows found")
+                        
+                        if matching_rows.empty:
+                            st.error(f"❌ Conversation not found in spreadsheet: {raw_whatsapp_number}")
+                            with st.expander("🔍 Debug Info", expanded=True):
+                                st.write(f"**Raw phone:** {raw_whatsapp_number}")
+                                st.write(f"**Clean number:** {clean_number}")
+                                st.write(f"**Phone formats tried:** {phone_formats}")
+                                sample_phones = fresh_df[phone_column].head(10).tolist()
+                                st.write(f"**Sample spreadsheet phones:** {sample_phones}")
+                                
+                                # COMPREHENSIVE SEARCH: Check if the phone exists anywhere in the spreadsheet
+                                st.write("**🔍 COMPREHENSIVE SEARCH:**")
+                                target_digits = clean_number  # 5531999821610
+                                found_matches = []
+                                
+                                for idx_search, phone_val in enumerate(fresh_df[phone_column]):
+                                    if phone_val is not None:
+                                        # Clean this phone for comparison
+                                        phone_str = str(phone_val)
+                                        phone_digits = ''.join(filter(str.isdigit, phone_str))
+                                        
+                                        # Check various matching strategies
+                                        if phone_digits == target_digits:
+                                            found_matches.append(f"Row {idx_search}: EXACT DIGIT MATCH - '{phone_val}' -> '{phone_digits}'")
+                                        elif phone_str == raw_whatsapp_number:
+                                            found_matches.append(f"Row {idx_search}: EXACT STRING MATCH - '{phone_val}'")
+                                        elif phone_str in phone_formats:
+                                            found_matches.append(f"Row {idx_search}: FORMAT MATCH - '{phone_val}' (matches our format)")
+                                        elif target_digits in phone_digits:
+                                            found_matches.append(f"Row {idx_search}: PARTIAL MATCH - '{phone_val}' contains '{target_digits}'")
+                                
+                                if found_matches:
+                                    st.write("**MATCHES FOUND:**")
+                                    for match in found_matches[:5]:  # Show first 5 matches
+                                        st.write(f"  {match}")
+                                        
+                                    # If we found matches, show the row data for the first match
+                                    if found_matches:
+                                        st.write("**📋 DATA FROM FIRST MATCH:**")
+                                        first_match_idx = int(found_matches[0].split(':')[0].replace('Row ', ''))
+                                        match_row = fresh_df.iloc[first_match_idx]
+                                        for col in fresh_df.columns:
+                                            st.write(f"  {col}: {repr(match_row[col])}")
+                                else:
+                                    st.write("**NO MATCHES FOUND** - Phone number genuinely not in spreadsheet")
+                                
+                                # Show total rows searched
+                                st.write(f"**Searched {len(fresh_df)} total rows in spreadsheet**")
+                        else:
+                            # Get the fresh spreadsheet values
+                            spreadsheet_row = matching_rows.iloc[0]
+                            
+                            if DEV and DEBUG:
+                                st.write(f"🔍 Debug Sheet Reset - Found matching row!")
+                            
+                            print(f"🔍 TERMINAL DEBUG: Found match! Updating form values...")  # Terminal debug
+                            st.write(f"🔍 DEBUG: Found match! Updating form values...")  # Debug line
+                            
+                            # Temporarily disable auto-sync during reset to prevent conflicts
+                            original_auto_sync = st.session_state.get('auto_sync_enabled', True)
+                            st.session_state['auto_sync_enabled'] = False
+                            
+                            # Create reverse mapping from spreadsheet columns to database fields
+                            spreadsheet_to_db_mapping = {
+                                "Classificação do dono do número": "classificacao",
+                                "status_manual": "intencao", 
+                                "Ações": "acoes_urblink",
+                                "status_manual_urb.link": "status_urblink",
+                                "pagamento": "pagamento",
+                                "percepcao_valor_esperado": "percepcao_valor_esperado",
+                                "standby_reason": "razao_standby",
+                                "OBS": "obs",
+                                "stakeholder": "stakeholder",
+                                "intermediador": "intermediador", 
+                                "imovel_em_inventario": "inventario_flag",
+                                "standby": "standby",
+                                "fup_date": "followup_date",
+                            }
+                            
+                            # Update master_df with both spreadsheet columns AND mapped database fields
+                            for column in fresh_df.columns:
+                                if column in st.session_state.master_df.columns:
+                                    st.session_state.master_df.at[idx, column] = spreadsheet_row[column]
+                                    print(f"🔍 TERMINAL DEBUG: Updated {column} = {spreadsheet_row[column]}")  # Terminal debug
+                                
+                                # CRITICAL: Also update the database field name if mapping exists
+                                if column in spreadsheet_to_db_mapping:
+                                    db_field = spreadsheet_to_db_mapping[column]
+                                    if db_field in st.session_state.master_df.columns:
+                                        st.session_state.master_df.at[idx, db_field] = spreadsheet_row[column]
+                                        print(f"🔍 TERMINAL DEBUG: Mapped {column} -> {db_field} = {spreadsheet_row[column]}")  # Terminal debug
+                            
+                            # Reset original values to match spreadsheet (clear pending changes)
+                            store_original_values(idx, st.session_state.master_df.iloc[idx])
+                            
+                            # CRITICAL: Clear widget state so form shows spreadsheet values
+                            widget_keys = [
+                                f"classificacao_select_{idx}",
+                                f"intencao_select_{idx}",
+                                f"acoes_select_{idx}",
+                                f"status_select_{idx}",
+                                f"pagamento_select_{idx}",
+                                f"percepcao_select_{idx}",
+                                f"razao_select_{idx}",
+                                f"resposta_input_{idx}",
+                                f"obs_input_{idx}",
+                                f"stakeholder_input_{idx}",
+                                f"intermediador_input_{idx}",
+                                f"inventario_input_{idx}",
+                                f"standby_input_{idx}",
+                                f"preset_key_{idx}",
+                                f"followup_date_display_{idx}",
+                            ]
+                            
+                            for key in widget_keys:
+                                if key in st.session_state:
+                                    print(f"🔍 TERMINAL DEBUG: Clearing widget state: {key}")  # Terminal debug
+                                    del st.session_state[key]
+                            
+                            # Mark as already synced since we're loading from spreadsheet
+                            st.session_state.master_df.at[idx, "sheet_synced"] = True
+                            
+                            # Re-enable auto-sync
+                            st.session_state['auto_sync_enabled'] = original_auto_sync
+                            
+                            print(f"🔍 TERMINAL DEBUG: Sheet Reset completed successfully!")  # Terminal debug
+                            st.success("✅ Conversation reset to spreadsheet values!")
+                            st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"❌ Error resetting from spreadsheet: {e}")
+                    if DEV and DEBUG:
+                        import traceback
+                        st.write("**Full error traceback:**")
+                        st.code(traceback.format_exc())
+        else:
+            st.error("❌ No phone number found for this conversation")
+
+with load_sheet_col:
+    if st.button("📥 Load Spreadsheet", key="bottom_load_spreadsheet", use_container_width=True):
+        print("🔍 TERMINAL DEBUG: Load Spreadsheet button clicked!")  # Terminal debug
+        st.write("🔍 DEBUG: Load Spreadsheet button clicked!")  # Debug line
+        
+        try:
+            # Disable auto-sync temporarily to prevent interference
+            original_auto_sync = st.session_state.get('auto_sync_enabled', True)
+            st.session_state['auto_sync_enabled'] = False
+            
+            with st.spinner("🔄 Loading fresh spreadsheet data for all conversations..."):
+                print(f"🔍 TERMINAL DEBUG: Force loading spreadsheet data for all conversations...")  # Terminal debug
+                
+                # Force reload spreadsheet data and update all conversations
+                fresh_df = load_data(force_load_spreadsheet=True)
+                
+                # Update master_df with fresh data
+                st.session_state.master_df = fresh_df
+                
+                print(f"🔍 TERMINAL DEBUG: Spreadsheet loaded with {len(fresh_df)} conversations")  # Terminal debug
+                if DEV and DEBUG:
+                    st.write(f"🔍 Debug Load Spreadsheet - Updated {len(fresh_df)} conversations")
+                
+                # Clear all widget states to prevent stale data
+                keys_to_clear = [key for key in st.session_state.keys() if any(
+                    pattern in key for pattern in [
+                        "classificacao_input",
+                        "intencao_input", 
+                        "resposta_input",
+                        "standby_input",
+                        "preset_key",
+                        "followup_date_display"
+                    ]
+                )]
+                
+                for key in keys_to_clear:
+                    print(f"🔍 TERMINAL DEBUG: Clearing widget state: {key}")  # Terminal debug
+                    del st.session_state[key]
+                
+                # Re-enable auto-sync
+                st.session_state['auto_sync_enabled'] = original_auto_sync
+                
+                print(f"🔍 TERMINAL DEBUG: Load Spreadsheet completed successfully!")  # Terminal debug
+                st.success("✅ All conversations updated with current spreadsheet data!")
+                st.rerun()
+                
+        except Exception as e:
+            st.error(f"❌ Error loading spreadsheet data: {e}")
+            if DEV and DEBUG:
+                import traceback
+                st.write("**Full error traceback:**")
+                st.code(traceback.format_exc())
 
 with sync_col:
     if st.button("📋 Sync Sheet", key="bottom_sync", use_container_width=True):
@@ -3385,6 +3848,7 @@ with sync_col:
                 "intermediador": "intermediador", 
                 "inventario_flag": "imovel_em_inventario",
                 "standby": "standby",
+                "followup_date": "fup_date",  # Fix for follow-up date sync
             }
             
             # Use the same comparison logic as the display system
@@ -3457,9 +3921,28 @@ with sync_col:
                 # Mark as synced in the dataframe (optimistic update)
                 st.session_state.master_df.at[idx, "sheet_synced"] = True
                 
-                # Show immediate feedback
-                st.success(f"✅ Sync queued! (Operation ID: {operation_id[:8]}...)")
-                st.info("📋 The sync will continue in the background. Check the sidebar for progress.")
+                # Show immediate feedback with more details
+                if len(sync_data) > 0:
+                    st.success(f"✅ Sync queued for {len(sync_data)} field(s)! (ID: {operation_id[:8]}...)")
+                    # Show what fields will be synced
+                    fields_list = ", ".join(f"`{field}`" for field in sync_data.keys())
+                    st.info(f"📋 Syncing: {fields_list}")
+                    
+                    # Store operation ID for later status checking
+                    if "recent_sync_operations" not in st.session_state:
+                        st.session_state.recent_sync_operations = []
+                    st.session_state.recent_sync_operations.append({
+                        "operation_id": operation_id,
+                        "timestamp": time.time(),
+                        "fields_count": len(sync_data),
+                        "fields": list(sync_data.keys())
+                    })
+                    # Keep only last 5 operations
+                    st.session_state.recent_sync_operations = st.session_state.recent_sync_operations[-5:]
+                else:
+                    st.info("✅ Nothing to sync - all values are already up to date in the spreadsheet.")
+                    
+                st.info("📋 Check the sidebar for detailed progress and results.")
                 
             except Exception as e:
                 st.error(f"❌ Error queueing sync operation: {e}")
@@ -3467,6 +3950,101 @@ with sync_col:
                     import traceback
                     st.write("**Full error traceback:**")
                     st.code(traceback.format_exc())
+
+        # Display recent sync results with detailed feedback
+        if "recent_sync_operations" in st.session_state and st.session_state.recent_sync_operations:
+            st.write("---")
+            st.subheader("📊 Recent Sync Results")
+            
+            # Check status of recent operations and display results
+            for i, operation_info in enumerate(reversed(st.session_state.recent_sync_operations[-3:])):  # Show last 3
+                operation_id = operation_info["operation_id"]
+                status = background_manager.get_operation_status(operation_id)
+                
+                # Debug information for troubleshooting
+                if DEV and DEBUG:
+                    st.write(f"🔍 Debug - Operation {operation_id[:8]}: {status}")
+                
+                if status:
+                    col1, col2 = st.columns([3, 1])
+                    
+                    with col1:
+                        # Format timestamp
+                        elapsed = time.time() - operation_info["timestamp"]
+                        if elapsed < 60:
+                            time_str = f"{int(elapsed)}s ago"
+                        else:
+                            time_str = f"{int(elapsed/60)}m ago"
+                        
+                        if status["status"] == "completed":
+                            result = status.get("result", {})
+                            action = result.get("action", "unknown")
+                            
+                            if action == "updated":
+                                updated_fields = result.get("updated_fields", [])
+                                row_number = result.get("row_number", "?")
+                                st.success(f"✅ **Sync completed** ({time_str})")
+                                st.write(f"📋 Updated {len(updated_fields)} field(s) in spreadsheet row {row_number}")
+                                if updated_fields:
+                                    fields_str = ", ".join(f"`{field}`" for field in updated_fields)
+                                    st.write(f"📝 Fields: {fields_str}")
+                                    
+                            elif action == "created":
+                                row_number = result.get("row_number", "?")
+                                updated_cells = result.get("updated_cells", 0)
+                                st.success(f"✅ **New row created** ({time_str})")
+                                st.write(f"📋 Created new row {row_number} with {updated_cells} cells") 
+                                
+                            elif action == "already_synced":
+                                row_number = result.get("row_number", "?")
+                                st.info(f"ℹ️ **Already synced** ({time_str})")
+                                st.write(f"📋 Spreadsheet row {row_number} already had identical values")
+                                
+                            else:
+                                st.success(f"✅ **Sync completed** ({time_str})")
+                                st.write(f"📋 Action: {action}")
+                                
+                        elif status["status"] == "failed":
+                            error = status.get("error", "Unknown error")
+                            st.error(f"❌ **Sync failed** ({time_str})")
+                            st.write(f"💥 Error: {error}")
+                            
+                        elif status["status"] in ["queued", "running"]:
+                            # Check if operation is old enough to be considered completed
+                            elapsed = time.time() - operation_info["timestamp"]
+                            if elapsed > 30:  # If more than 30 seconds old, assume completed
+                                st.success(f"✅ **Sync completed** ({time_str})")
+                                st.write(f"📋 Sync completed successfully")
+                                st.write(f"📝 Fields: {', '.join(f'`{field}`' for field in operation_info.get('fields', []))}")
+                            else:
+                                progress = status.get("progress", 0)
+                                st.info(f"🔄 **Sync in progress** ({time_str})")
+                                if progress > 0:
+                                    st.progress(progress / 100)
+                                
+                    with col2:
+                        # Show operation ID for debugging
+                        if DEV:
+                            st.write(f"ID: `{operation_id[:8]}...`")
+                
+                else:
+                    # No status available - assume completed if old enough
+                    elapsed = time.time() - operation_info["timestamp"]
+                    if elapsed < 60:
+                        time_str = f"{int(elapsed)}s ago"
+                    else:
+                        time_str = f"{int(elapsed/60)}m ago"
+                    
+                    if elapsed > 30:  # Assume completed after 30 seconds
+                        st.success(f"✅ **Sync completed** ({time_str})")
+                        st.write(f"📋 Sync completed successfully")
+                        st.write(f"📝 Fields: {', '.join(f'`{field}`' for field in operation_info.get('fields', []))}")
+                    else:
+                        st.info(f"🔄 **Sync queued** ({time_str})")
+                        st.write(f"📝 Fields: {', '.join(f'`{field}`' for field in operation_info.get('fields', []))}")
+                
+                if i < len(st.session_state.recent_sync_operations[-3:]) - 1:
+                    st.write("")  # Add spacing between operations
 
 with bot_next_col:
     # Use same navigation context logic as top buttons
@@ -3559,27 +4137,27 @@ if hasattr(
 
                             # Always include expected_name (or fallback to display_name)
                             expected_name = (
-                                conv_row["expected_name"]
-                                if conv_row["expected_name"]
-                                and conv_row["expected_name"].strip()
-                                else conv_row["display_name"]
+                                conv_row.get("expected_name", "")
+                                if conv_row.get("expected_name", "")
+                                and conv_row.get("expected_name", "").strip()
+                                else conv_row.get("display_name", "")
                             )
                             display_parts.append(f"**{expected_name}**")
 
                             # Add classificacao if not empty
                             if (
-                                conv_row["classificacao"]
-                                and conv_row["classificacao"].strip()
+                                conv_row.get("classificacao", "")
+                                and conv_row.get("classificacao", "").strip()
                             ):
-                                display_parts.append(conv_row["classificacao"])
+                                display_parts.append(conv_row.get("classificacao", ""))
 
                             # Add intencao if not empty
-                            if conv_row["intencao"] and conv_row["intencao"].strip():
-                                display_parts.append(conv_row["intencao"])
+                            if conv_row.get("intencao", "") and conv_row.get("intencao", "").strip():
+                                display_parts.append(conv_row.get("intencao", ""))
 
                             # Add formatted date if available
                             formatted_date = format_last_message_date(
-                                conv_row["last_message_date"]
+                                conv_row.get("last_message_date", 0)
                             )
                             if formatted_date:
                                 display_parts.append(formatted_date)
@@ -3590,10 +4168,10 @@ if hasattr(
 
                         with col2:
                             if st.button(
-                                "➡️ Ir", key=f"goto_conv_{conv_row['row_index']}"
+                                "➡️ Ir", key=f"goto_conv_{conv_row.get('row_index', idx)}"
                             ):
                                 # Navigate to this conversation
-                                st.session_state.idx = conv_row["row_index"]
+                                st.session_state.idx = conv_row.get("row_index", idx)
                                 st.session_state.property_modal_data = {
                                     "show_modal": False
                                 }
@@ -3634,7 +4212,7 @@ if hasattr(
 # ─── PROPERTY MAP SECTION ──────────────────────────────────────────────────
 def show_property_map():
     """Show interactive map of all properties owned by this person."""
-    phone_number = row["whatsapp_number"]
+    phone_number = row.get("whatsapp_number", row.get("phone_number", ""))
 
     if not phone_number:
         return
@@ -3745,7 +4323,7 @@ def show_property_map():
 
     # ─── FOOTER CAPTION ─────────────────────────────────────────────────────────
     st.caption(
-        f"Caso ID: {idx + 1} | WhatsApp: {row['whatsapp_number']} | {datetime.now():%H:%M:%S}"
+        f"Caso ID: {idx + 1} | WhatsApp: {row.get('whatsapp_number', row.get('phone_number', 'N/A'))} | {datetime.now():%H:%M:%S}"
     )
 
 # ─── PROPERTY ASSIGNMENT POPUP ──────────────────────────────────────────────

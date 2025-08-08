@@ -416,3 +416,109 @@ Resolves slow page loading issues and provides immediate access to critical sect
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
+
+## Story #007: Comprehensive Google Sheets Sync Reliability and Transparency - **WIP**
+
+**Problem:** 
+The Google Sheets synchronization functionality has multiple critical issues:
+1. Follow-up date field (`fup_date`) sync is not working properly
+2. Sync success/failure is unclear, requiring manual spreadsheet checking for verification
+3. "Modificações pendentes" field only shows count (e.g., "🔄 5 modificações pendentes") instead of listing which specific fields have changes
+4. No way to reset individual conversation fields to match spreadsheet values
+5. No manual control over when spreadsheet data is loaded - it happens unpredictably
+6. Spreadsheet values should only load at session start and when explicitly requested
+
+**Why it was important:**
+- Users lose confidence in the sync system and have to manually verify every change
+- Cannot identify which specific fields need attention when modifications are pending
+- No recovery mechanism when local data gets out of sync with spreadsheet
+- Unpredictable spreadsheet loading creates inconsistent user experience
+- Critical business data may not be properly synchronized, leading to data integrity issues
+- Manual verification workflow is inefficient and error-prone
+
+**Success criteria:**
+1. Follow-up date (`fup_date`) field syncs successfully to spreadsheet
+2. Sync operations provide clear success/failure feedback with detailed results
+3. "Modificações pendentes" shows list of specific field names that have changes instead of just count
+4. "Sheet Reset" button on Processor page resets that conversation's fields to spreadsheet values
+5. "Load Spreadsheet" button manually updates all conversations with current spreadsheet values
+6. Spreadsheet data loads only in two specific moments: new session start and manual "Load Spreadsheet" button click
+7. All sync operations are reliable and provide clear user feedback
+
+**Tasks to accomplish:**
+- [x] Debug and fix `fup_date` field synchronization issues
+- [x] Implement detailed sync result feedback system with success/error reporting
+- [x] Replace "modificações pendentes" count with detailed field list display
+- [x] Add "Sheet Reset" button functionality for individual conversation reset
+- [ ] Add "Load Spreadsheet" button for manual spreadsheet data refresh
+- [ ] Control spreadsheet loading to occur only at session start and manual trigger
+- [ ] Add comprehensive error handling and user feedback for all sync operations
+- [ ] Test all sync scenarios to ensure reliability
+
+**Tests needed to verify completion:**
+- [ ] Verify `fup_date` field syncs correctly to spreadsheet
+- [ ] Test sync feedback shows detailed success/failure information
+- [ ] Confirm "modificações pendentes" displays specific field names
+- [ ] Test "Sheet Reset" button resets individual conversation correctly
+- [ ] Test "Load Spreadsheet" button updates all conversations
+- [ ] Verify spreadsheet data loads only at session start and manual button click
+- [ ] Test error handling and user feedback for various sync scenarios
+
+---
+
+## Story #008: Enhanced Property Map Visualization and User Experience - **COMPLETED**
+
+**Problem:** 
+The property map visualization had several usability and display issues: polygon borders were invisible (same color as fill), empty/null fields were cluttering popups and tooltips, number formatting was inconsistent with Brazilian standards, field names didn't match actual data columns, and the interface lacked proper customization options for map dimensions and color selection accessibility.
+
+**Why it's important:**
+- Maps are a core visualization tool for property analysis and decision-making
+- Clear polygon boundaries are essential for identifying property limits and areas
+- Clean, properly formatted data in popups/tooltips improves user experience and data interpretation
+- Accessible color selection and map customization enhances workflow efficiency
+- Consistent field naming prevents confusion and missing data displays
+
+**Success criteria:**
+- All polygon borders are clearly visible with black contours
+- Empty/null fields are completely filtered from popups and tooltips
+- Number formatting follows Brazilian standards (R$ for currency, proper integer display, area units)
+- Field names match actual data columns (e.g., COMPLEMENTO ENDERECO vs NET COMPLEMENTO)
+- Color selector is easily accessible outside advanced options
+- Map dimensions are customizable through advanced options
+- Priority fields can be hardcoded to appear first in color selector
+
+**Tasks to accomplish:**
+1. ✅ **COMPLETED**: Make polygon borders visible with black color instead of matching fill color
+2. ✅ **COMPLETED**: Implement comprehensive null/empty field filtering for popups and tooltips
+3. ✅ **COMPLETED**: Add proper Brazilian number formatting (remove .0 from integers, format currency/area correctly)
+4. ✅ **COMPLETED**: Fix field name mismatch (NET COMPLEMENTO → COMPLEMENTO ENDERECO)
+5. ✅ **COMPLETED**: Move debug/test files to analysis_temp/ folder per project guidelines
+6. ✅ **COMPLETED**: Move 'Colorir por' selector outside advanced options, directly below the map
+7. ✅ **COMPLETED**: Add map dimension controls (width/height) to advanced options
+8. ✅ **COMPLETED**: Create hardcoded priority section for color selector options ordering
+9. ✅ **COMPLETED**: Fix excessive white space between map and controls with advanced container control
+
+**Tests needed to verify completion:**
+- ✅ Polygon borders are clearly visible with black contours at different thickness levels
+- ✅ Empty fields (like COMPLEMENTO ENDERECO with "None" values) don't appear in popups
+- ✅ Numbers display correctly: integers without .0, currency as R$ X.XXX, areas as XXm2
+- ✅ Color selector appears directly below map and is easily accessible
+- ✅ Map dimensions can be adjusted through advanced options
+- ✅ Priority fields appear first in color selector, others alphabetically sorted
+- ✅ White space between map and controls is minimized with proper container control
+
+**Main problems encountered:**
+- Initial filtering logic wasn't catching all null/empty variations (nan, None, empty strings, whitespace)
+- Field names in code didn't match actual data column names
+- Polygon borders were invisible due to using same color as fill
+- Interface organization needed improvement for better user workflow
+- Map dimension controls had caching issues requiring key changes for proper re-rendering
+- Excessive white space between map and controls due to Streamlit container sizing issues
+
+**Lessons learned:**
+- Comprehensive null checking requires multiple conditions (pd.notna, str.strip, specific field checks)
+- Field naming consistency between code and data is crucial for proper display
+- Visual contrast is essential for map usability (black borders vs colored fills)
+- UI organization should prioritize frequently used controls for accessibility
+- Map dimension controls need proper key management for Streamlit re-rendering
+- Container white space issues require targeted CSS and st.empty() for precise control

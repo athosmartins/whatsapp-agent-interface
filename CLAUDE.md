@@ -14,36 +14,50 @@ When a user requests code changes or new features, ALWAYS:
    - Name of the user story
    - What is the problem
    - Why is the problem important
+   - Success criteria (what defines completion)
 3. **Ask clarifying questions** if the story isn't clear
 4. **Confirm the story** with the user before proceeding
 
-### 2. Planning Phase
-Once the story is confirmed:
+### 2. Story Commitment Phase
+**IMMEDIATELY after user approval of the story:**
 
-1. **Create a detailed plan** with:
-   - List of tasks to accomplish
+1. **Write the approved story to USER_STORIES.md** as "WIP" (Work In Progress)
+2. **Include the complete story definition** with:
+   - Story name, problem, importance
+   - Success criteria agreed upon
+   - Tasks to accomplish
    - Tests needed to verify completion
-2. **Confirm the plan** with the user before starting development
+3. **This serves as our contract** - both Claude and user can reference this commitment
 
 ### 3. Development Phase
 During development:
 
 1. **Monitor for scope creep** - if the user deviates from the original story, warn them and confirm if it's intentional
-2. **Reference previous stories** to ensure no regression of solved problems
-3. **Focus on completing the agreed story** without deviation
+2. **If success criteria changes during development:**
+   - **EXPLICITLY tell the user** that criteria are changing from the original commitment
+   - **Ask permission** to modify the story criteria in USER_STORIES.md
+   - **Update the WIP story** only after user approval
+3. **Reference previous stories** to ensure no regression of solved problems
+4. **After completing each task:**
+   - **Update USER_STORIES.md** to mark task as completed in the WIP story section
+   - **IMMEDIATELY ask user to test the completed task** before proceeding to the next task
+   - **WAIT for user confirmation** that the task works as expected
+   - **DO NOT proceed to the next task** until user has tested and approved
+5. **Focus on completing the agreed story** without deviation
 
 ### 4. Testing & Verification Phase (MANDATORY)
-**BEFORE claiming story completion, ALWAYS perform comprehensive testing:**
+**BEFORE claiming story completion, check against original WIP story criteria:**
 
-1. **Playwright Testing**: Test all functionality with browser automation
-2. **Debug Log Monitoring**: Monitor `/tmp/mega_data_debug.log` for:
+1. **Review the WIP story in USER_STORIES.md** to verify all success criteria are met
+2. **Playwright Testing**: Test all functionality with browser automation
+3. **Debug Log Monitoring**: Monitor `/tmp/mega_data_debug.log` for:
    - Data flow verification
    - Session state consistency 
    - Expensive operation detection
    - Filter synchronization validation
-3. **Performance Analysis**: Verify no regressions or unnecessary operations
-4. **Fix Issues Found**: Address any problems discovered during testing
-5. **Only proceed to completion after thorough testing confirms expected behavior**
+4. **Performance Analysis**: Verify no regressions or unnecessary operations
+5. **Fix Issues Found**: Address any problems discovered during testing
+6. **Only proceed to completion after thorough testing confirms expected behavior**
 
 ### 5. Completion Phase
 When testing confirms the story works correctly:
@@ -52,17 +66,16 @@ When testing confirms the story works correctly:
    - User has thoroughly tested the implementation
    - User has confirmed all requirements are met
    - User has explicitly approved the story completion
-2. **ONLY AFTER USER APPROVAL, create a completion summary** with:
-   - Story name, problem, and importance
+2. **ONLY AFTER USER APPROVAL, update USER_STORIES.md** to change status from "WIP" to "COMPLETED"
+3. **Add completion summary** with:
    - Tasks accomplished
    - Main problems encountered
    - Lessons learned
    - Tests that confirmed completion
    - Commit message for terminal use
-3. **Update USER_STORIES.md** with the new story entry
 4. **Assign sequential story number**
 
-### 5. Regression Prevention
+### 6. Regression Prevention
 - **ALWAYS review USER_STORIES.md** before starting any new story
 - **Cross-reference** current changes against previously solved problems
 - **Ensure** new code doesn't reintroduce old issues
