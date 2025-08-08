@@ -1695,9 +1695,9 @@ with nav_prev_col:
     st.button(
         "⬅️ Anterior",
         key="top_prev",
-        disabled=True,  # Always disabled
+        disabled=prev_disabled,
+        on_click=goto_prev,
         use_container_width=True,
-        help="Navegação entre conversas filtradas temporariamente desabilitada"
     )
 with nav_property_col:
     if st.button(
@@ -1755,9 +1755,9 @@ with nav_next_col:
     st.button(
         "Próximo ➡️",
         key="top_next",
-        disabled=True,  # Always disabled
+        disabled=next_disabled,
+        on_click=goto_next,
         use_container_width=True,
-        help="Navegação entre conversas filtradas temporariamente desabilitada"
     )
 
 # ─── SYNC INITIALIZATION ────────────────────────────────────────────────────
