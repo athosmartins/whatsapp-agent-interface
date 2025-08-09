@@ -16,7 +16,8 @@ from config import (
     HEX_PROJECT_ID_PESSOAS_REFERENCIA,
     HEX_PROJECT_ID_VOXUY,
     HEX_API_TOKEN,
-    HEX_PROJECT_ID_OUTREACH
+    HEX_PROJECT_ID_OUTREACH,
+    HEX_PROJECT_ID_WHATSAPP_REFRESH
 )
 
 
@@ -106,6 +107,14 @@ HEX_CONFIGS = {
         "success_message": "Régua de Contatos",
         "session_key": "outreach_last_run_url",
         "link_text": "Abrir Régua de Contatos no Hex"
+    },
+    "refresh_whatsapp_conversations": {
+        "project_id": HEX_PROJECT_ID_WHATSAPP_REFRESH,
+        "input_params": lambda: {},  # No input parameters needed
+        "button_text": "🔄 Atualizar Conversas WhatsApp",
+        "success_message": "Atualização de Conversas",
+        "session_key": "whatsapp_refresh_last_run_url",
+        "link_text": "Abrir Atualização no Hex"
     }
 }
 
@@ -118,7 +127,7 @@ def render_hex_dropdown_interface(filtered_df, **kwargs):
         filtered_df: The DataFrame to send
         **kwargs: Additional parameters (e.g., funnel for Voxuy)
     """
-    print(f"[HEX_DEBUG] render_hex_dropdown_interface called with DF shape: {filtered_df.shape}")
+    print(f"[HEX_DEBUG] render_hex_dropdown_interface called with DF shape: {filtered_df.shape if filtered_df is not None else 'None'}")
     print(f"[HEX_DEBUG] kwargs: {kwargs}")
     
     if not requests:
@@ -129,9 +138,15 @@ def render_hex_dropdown_interface(filtered_df, **kwargs):
         st.warning("⚠️ HEX_API_SECRET não configurado. Configure a variável de ambiente para habilitar integração com Hex.")
         return
     
-    if filtered_df.empty:
-        st.warning("⚠️ Nenhum dado filtrado para enviar.")
-        return
+    # Check if dataframe is required and warn if empty
+    if filtered_df is not None and filtered_df.empty:
+        # Check if any non-refresh actions are available
+        non_refresh_actions = [key for key in HEX_CONFIGS.keys() if key != "refresh_whatsapp_conversations"]
+        if len(non_refresh_actions) > 0:
+            st.warning("⚠️ Nenhum dado filtrado para enviar. Apenas a ação 'Atualizar Conversas WhatsApp' está disponível sem dados.")
+    elif filtered_df is None:
+        # Only refresh action available
+        pass
     
     # Create dropdown with options
     options = list(HEX_CONFIGS.keys())
@@ -166,18 +181,29 @@ def render_hex_dropdown_interface(filtered_df, **kwargs):
             with st.spinner(f"Enviando dados para {config['success_message']}..."):
                 try:
                     # Generate input parameters
-                    if selected_action == "mandar_voxuy":
+                    if selected_action == "refresh_whatsapp_conversations":
+                        input_params = config["input_params"]()  # No dataframe needed
+                        # Use special function for no-dataframe execution
+                        result = send_hex_execution_request(
+                            project_id=config["project_id"],
+                            input_params=input_params
+                        )
+                    elif selected_action == "mandar_voxuy":
                         input_params = config["input_params"](filtered_df, **kwargs)
+                        result = send_dataframe_to_hex_with_params(
+                            filtered_df,
+                            project_id=config["project_id"],
+                            input_params=input_params
+                        )
                     else:
                         input_params = config["input_params"](filtered_df)
+                        result = send_dataframe_to_hex_with_params(
+                            filtered_df,
+                            project_id=config["project_id"],
+                            input_params=input_params
+                        )
                     
-                    print(f"[HEX_DEBUG] Input params keys: {list(input_params.keys())}")
-                    
-                    result = send_dataframe_to_hex_with_params(
-                        filtered_df,
-                        project_id=config["project_id"],
-                        input_params=input_params
-                    )
+                    print(f"[HEX_DEBUG] Input params keys: {list(input_params.keys()) if input_params else 'No params'}")
                     print(f"[HEX_DEBUG] API result: {result}")
                     
                 except Exception as e:
@@ -436,3 +462,67 @@ def send_dataframe_to_hex_with_params(df, project_id, input_params):
 
 
 # Legacy functions removed - now using render_hex_button() with configuration
+
+def send_hex_execution_request(project_id, input_params=None):
+    """
+    Send a execution request to a Hex project without requiring a DataFrame.
+    
+    Args:
+        project_id: Hex project ID
+        input_params: Dictionary of input parameters for the Hex notebook (optional)
+    
+    Returns:
+        dict: Response with success status, run_url, and any error messages
+    """
+    if not requests:
+        return {
+            "success": False,
+            "error": "requests library not available. Install with: pip install requests",
+            "run_url": None
+        }
+    
+    if not HEX_API_TOKEN:
+        return {
+            "success": False,
+            "error": "HEX_API_SECRET environment variable not set",
+            "run_url": None
+        }
+    
+    try:
+        # Prepare request body
+        request_body = {}
+        if input_params:
+            request_body["inputParams"] = input_params
+        
+        # Make the API request
+        response = requests.post(
+            url=f"{HEX_API_BASE_URL}/projects/{project_id}/runs",
+            headers={
+                "Authorization": f"Bearer {HEX_API_TOKEN}",
+            },
+            json=request_body
+        )
+        
+        if response.status_code == 201:
+            run_data = response.json()
+            run_url = run_data.get("runUrl", "")
+            
+            return {
+                "success": True,
+                "run_url": run_url,
+                "error": None,
+                "response_data": run_data
+            }
+        else:
+            return {
+                "success": False,
+                "error": f"API request failed with status {response.status_code}: {response.text}",
+                "run_url": None
+            }
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Exception occurred: {str(e)}",
+            "run_url": None
+        }

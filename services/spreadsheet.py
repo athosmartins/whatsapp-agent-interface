@@ -181,54 +181,29 @@ def get_sheet_data_direct(sheet_name: str = "report", range_name: str = None) ->
         traceback.print_exc()
         return []
 
+@st.cache_data(ttl=1800)  # Cache for 30 minutes - RESTORED ORIGINAL LOGIC
 def get_sheet_data(sheet_name: str = "report", range_name: str = None, force_load: bool = False) -> List[List]:
     """
-    Read data from Google Sheet with session-controlled loading.
-    
-    CONTROLLED LOADING BEHAVIOR:
-    - Only loads at session start (when spreadsheet_loaded flag is not set)
-    - Only loads when force_load=True (manual trigger like "Load Spreadsheet" button)
-    - Returns cached data from session state otherwise
-    - This prevents unpredictable spreadsheet loading during normal operations
+    Read data from Google Sheet - RESTORED TO ORIGINAL WORKING LOGIC.
+    Uses simple Streamlit caching instead of complex session state management.
     
     Args:
         sheet_name: Name of the sheet tab to read from
         range_name: Optional range specification (unused in current implementation)  
-        force_load: If True, bypasses session controls and forces fresh load from spreadsheet
+        force_load: If True, clears cache and forces fresh load from spreadsheet
     
     Returns:
         List of lists containing spreadsheet data
     """
-    # Check if we should load based on session state
-    spreadsheet_loaded = st.session_state.get('spreadsheet_loaded', False)
+    if force_load:
+        # Clear the cache and force fresh load
+        get_sheet_data.clear()
+        print(f"🔄 Force loading spreadsheet data from {sheet_name}")
     
-    # Determine if we should load
-    should_load = (
-        not spreadsheet_loaded or  # Session start - never loaded before
-        force_load                 # Manual trigger requested
-    )
-    
-    if should_load:
-        print(f"📋 Loading spreadsheet data from {sheet_name} (force_load={force_load}, first_load={not spreadsheet_loaded})")
-        
-        # Load fresh data from spreadsheet
-        sheet_data = get_sheet_data_direct(sheet_name, range_name)
-        
-        # Cache the data in session state
-        cache_key = f'cached_sheet_data_{sheet_name}'
-        st.session_state[cache_key] = sheet_data
-        st.session_state['spreadsheet_loaded'] = True
-        
-        print(f"✅ Spreadsheet data loaded and cached: {len(sheet_data)} rows")
-        return sheet_data
-    
-    else:
-        # Return cached data if available
-        cache_key = f'cached_sheet_data_{sheet_name}'
-        cached_data = st.session_state.get(cache_key, [])
-        
-        print(f"📄 Using cached spreadsheet data: {len(cached_data)} rows (spreadsheet already loaded this session)")
-        return cached_data
+    # Load fresh data from spreadsheet (will be cached by Streamlit)
+    sheet_data = get_sheet_data_direct(sheet_name, range_name)
+    print(f"📋 Loaded spreadsheet data: {len(sheet_data)} rows")
+    return sheet_data
 
 def update_sheet_row(row_number: int, values: List[Any], sheet_name: str = "Sheet1") -> bool:
     """Update a specific row in the Google Sheet."""

@@ -1323,44 +1323,106 @@ try:
         # Reset the index to ensure proper selection handling
         filtered_df = filtered_df.reset_index(drop=True)
 
-        # Create display dataframe with required columns
-        display_columns = ["display_name", "formatted_phone", "total_messages"]
-        display_column_names = ["Display Name", "Phone Number", "Messages"]
+        # Create display dataframe with required columns in specific order:
+        # display_name, classificacao, bairro, endereco, last_message, last_message_timestamp, complemento_endereco, phone_number, cpf
+        display_columns = []
+        display_column_names = []
 
-        # Add expected_name - use 'Nome' from spreadsheet data if available
-        if "Nome" in filtered_df.columns:
-            display_columns.insert(1, "Nome")
-            display_column_names.insert(1, "Expected Name")
-        elif "expected_name" in filtered_df.columns:
-            display_columns.insert(1, "expected_name")
-            display_column_names.insert(1, "Expected Name")
+        # 1. Display Name (always first)
+        if "display_name" in filtered_df.columns:
+            display_columns.append("display_name")
+            display_column_names.append("Display Name")
 
-        # Add CPF column if available
-        for cpf_col in ["CPF", "cpf", "documento", "Documento"]:
-            if cpf_col in filtered_df.columns:
-                display_columns.insert(
-                    -1, cpf_col
-                )  # Insert before the last column (Messages)
-                display_column_names.insert(-1, "CPF")
-                break
-
-        # Add sheets data columns if they exist
-        if "endereco_bairro" in filtered_df.columns:
-            display_columns.append("endereco_bairro")
-            display_column_names.append("Bairro")
-
-        if "endereco" in filtered_df.columns:
-            display_columns.append("endereco")
-            display_column_names.append("Endereco")
-
-        if "endereco_complemento" in filtered_df.columns:
-            display_columns.append("endereco_complemento")
-            display_column_names.append("Complemento")
-
+        # 2. Classificacao 
         if "Classificação do dono do número" in filtered_df.columns:
             display_columns.append("Classificação do dono do número")
             display_column_names.append("Classificacao")
 
+        # 3. Bairro
+        if "endereco_bairro" in filtered_df.columns:
+            display_columns.append("endereco_bairro")
+            display_column_names.append("Bairro")
+
+        # 4. Endereco
+        if "endereco" in filtered_df.columns:
+            display_columns.append("endereco")
+            display_column_names.append("Endereco")
+
+        # 5. Last Message
+        if "last_message" in filtered_df.columns:
+            display_columns.append("last_message")
+            display_column_names.append("Last Message")
+
+        # 6. Last Message Timestamp (formatted)
+        if "last_message_datetime_brt" in filtered_df.columns:
+            # Format timestamp to '08/Aug 14h35m22s' format
+            def format_timestamp(timestamp_str):
+                if not timestamp_str or pd.isna(timestamp_str) or timestamp_str == '':
+                    return ''
+                try:
+                    # Parse different possible datetime formats
+                    from datetime import datetime
+                    import re
+                    
+                    # Clean the timestamp string
+                    clean_timestamp = str(timestamp_str).strip()
+                    if not clean_timestamp:
+                        return ''
+                    
+                    # Try different parsing formats
+                    formats_to_try = [
+                        "%Y-%m-%d %H:%M:%S",    # 2024-08-08 14:35:22
+                        "%d/%m/%Y %H:%M:%S",    # 08/08/2024 14:35:22
+                        "%Y-%m-%dT%H:%M:%S",    # 2024-08-08T14:35:22
+                        "%d/%m/%y %H:%M:%S",    # 08/08/24 14:35:22
+                    ]
+                    
+                    dt = None
+                    for fmt in formats_to_try:
+                        try:
+                            dt = datetime.strptime(clean_timestamp, fmt)
+                            break
+                        except ValueError:
+                            continue
+                    
+                    if dt is None:
+                        return clean_timestamp  # Return original if can't parse
+                    
+                    # Format to requested format: '08/Aug 14h35m22s'
+                    month_names = {
+                        1: 'Jan', 2: 'Feb', 3: 'Mar', 4: 'Apr', 5: 'May', 6: 'Jun',
+                        7: 'Jul', 8: 'Aug', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dec'
+                    }
+                    
+                    formatted = f"{dt.day:02d}/{month_names[dt.month]} {dt.hour:02d}h{dt.minute:02d}m{dt.second:02d}s"
+                    return formatted
+                    
+                except Exception:
+                    return str(timestamp_str)  # Return original if error
+            
+            # Apply formatting to create new column
+            filtered_df["formatted_timestamp"] = filtered_df["last_message_datetime_brt"].apply(format_timestamp)
+            display_columns.append("formatted_timestamp")
+            display_column_names.append("Last Message Time")
+
+        # 7. Complemento Endereco
+        if "endereco_complemento" in filtered_df.columns:
+            display_columns.append("endereco_complemento")
+            display_column_names.append("Complemento")
+
+        # 8. Phone Number
+        if "formatted_phone" in filtered_df.columns:
+            display_columns.append("formatted_phone")
+            display_column_names.append("Phone Number")
+
+        # 9. CPF
+        for cpf_col in ["CPF", "cpf", "documento", "Documento"]:
+            if cpf_col in filtered_df.columns:
+                display_columns.append(cpf_col)
+                display_column_names.append("CPF")
+                break
+
+        # Add status if available (not in required order but useful)
         if "status" in filtered_df.columns:
             display_columns.append("status")
             display_column_names.append("Status")
@@ -1473,7 +1535,111 @@ try:
             # Add toggle for map loading
             col1, col2 = st.columns([3, 1])
             with col1:
-                pass  # Removed title as requested
+                # WhatsApp Database Refresh Button
+                refresh_col1, refresh_col2 = st.columns([1, 1])
+                
+                with refresh_col1:
+                    if st.button(
+                        "🔄 Atualizar Base WhatsApp",
+                        type="secondary",
+                        help="Executar notebook Hex para atualizar a base de dados das conversas WhatsApp"
+                    ):
+                        # Import Hex API service
+                        from services.hex_api import send_hex_execution_request
+                        from config import HEX_PROJECT_ID_WHATSAPP_REFRESH
+                        
+                        with st.spinner("🔄 Executando atualização da base de dados WhatsApp..."):
+                            result = send_hex_execution_request(
+                                project_id=HEX_PROJECT_ID_WHATSAPP_REFRESH,
+                                input_params={}
+                            )
+                            
+                            if result["success"]:
+                                st.success("✅ Atualização da base WhatsApp iniciada com sucesso!")
+                                
+                                # Store URL in session state
+                                st.session_state["whatsapp_refresh_last_run_url"] = result["run_url"]
+                                
+                                # Start monitoring for database updates
+                                from datetime import datetime
+                                st.session_state["whatsapp_refresh_monitoring"] = {
+                                    "started_at": datetime.now(),
+                                    "hex_run_url": result["run_url"],
+                                    "monitoring": True
+                                }
+                                
+                                st.info("🔄 Monitoramento ativado: a página será atualizada automaticamente quando novos dados estiverem disponíveis.")
+                            else:
+                                st.error(f"❌ Erro ao iniciar atualização: {result['error']}")
+                                
+                                if DEBUG:
+                                    st.write("**Debug Info:**")
+                                    st.write(f"- Project ID: {HEX_PROJECT_ID_WHATSAPP_REFRESH}")
+                                    st.write(f"- API Result: {result}")
+                
+                # PERSISTENT URL DISPLAY - Always show if available
+                stored_url = st.session_state.get("whatsapp_refresh_last_run_url")
+                if stored_url:
+                    st.markdown("**📋 Última Execução WhatsApp Refresh:**")
+                    st.markdown(f"[🚀 Abrir Execução no Hex]({stored_url})")
+                    with st.expander("🔗 URL da Execução"):
+                        st.code(stored_url, language=None)
+                    
+                    # Show last completion status if available
+                    last_monitoring = st.session_state.get("whatsapp_refresh_monitoring", {})
+                    if last_monitoring.get("data_refreshed", False):
+                        st.success("✅ **Último Pipeline**: Concluído com sucesso!")
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            st.write(f"📁 **Arquivo detectado:** {last_monitoring.get('file_detected_at', 'N/A')}")
+                        with col_b:
+                            st.write(f"🔄 **Dados atualizados:** {last_monitoring.get('data_refreshed_at', 'N/A')}")
+                    elif last_monitoring.get("file_detected", False):
+                        st.warning("⚠️ **Último Pipeline**: Arquivo detectado, mas atualização incompleta")
+                    elif last_monitoring.get("monitoring", False):
+                        st.info("🔄 **Pipeline Ativo**: Aguardando conclusão...")
+                        
+                # Clear completed monitoring button
+                if st.session_state.get("whatsapp_refresh_monitoring", {}).get("data_refreshed", False):
+                    if st.button("🗑️ Limpar Status", help="Limpar informações da última execução"):
+                        if "whatsapp_refresh_monitoring" in st.session_state:
+                            del st.session_state["whatsapp_refresh_monitoring"]
+                        if "whatsapp_refresh_last_run_url" in st.session_state:
+                            del st.session_state["whatsapp_refresh_last_run_url"]
+                        st.rerun()
+                
+                # Show monitoring status if active
+                monitoring_data = st.session_state.get("whatsapp_refresh_monitoring", {})
+                if monitoring_data.get("monitoring", False):
+                    from datetime import datetime
+                    started_at = monitoring_data["started_at"]
+                    current_time = datetime.now()
+                    elapsed_minutes = (current_time - started_at).total_seconds() / 60
+                    
+                    # Create comprehensive status display
+                    st.markdown("**🔄 Pipeline de Atualização - Status em Tempo Real:**")
+                    
+                    # Stage 1: Hex Execution
+                    st.markdown(f"✅ **Etapa 1: Execução Hex** - [🚀 Ver no Hex]({monitoring_data['hex_run_url']})")
+                    
+                    # Stage 2: Google Drive File Detection
+                    file_detected = monitoring_data.get("file_detected", False)
+                    if file_detected:
+                        detection_time = monitoring_data.get("file_detected_at", "")
+                        st.markdown(f"✅ **Etapa 2: Novo Arquivo Detectado** - {detection_time}")
+                    else:
+                        st.markdown("🔄 **Etapa 2: Aguardando Novo Arquivo** - Verificando Google Drive...")
+                    
+                    # Stage 3: Frontend Refresh
+                    data_refreshed = monitoring_data.get("data_refreshed", False)
+                    if data_refreshed:
+                        refresh_time = monitoring_data.get("data_refreshed_at", "")
+                        st.markdown(f"✅ **Etapa 3: Dados Atualizados** - {refresh_time}")
+                    else:
+                        st.markdown("⏳ **Etapa 3: Aguardando Atualização dos Dados**")
+                    
+                    # Overall progress
+                    st.info(f"⏱️ **Tempo Total**: {elapsed_minutes:.1f} minutos | **Próxima Verificação**: em ~{30 - (int(elapsed_minutes * 60) % 30)} segundos")
 
             with col2:
                 # Use session state to control map loading
@@ -1539,3 +1705,104 @@ try:
     render_operations_sidebar()
 except Exception as e:
     st.sidebar.error(f"Error displaying operations status: {e}")
+
+# ─── WHATSAPP DATABASE MONITORING ──────────────────────────────────────────
+# Check for WhatsApp database updates after Hex execution
+if st.session_state.get("whatsapp_refresh_monitoring", {}).get("monitoring", False):
+    try:
+        import time
+        from datetime import datetime, timedelta
+        from services.google_drive_loader import GoogleDriveLoader
+        
+        monitoring_data = st.session_state["whatsapp_refresh_monitoring"]
+        started_at = monitoring_data["started_at"]
+        current_time = datetime.now()
+        
+        # Monitor for up to 30 minutes
+        if current_time - started_at < timedelta(minutes=30):
+            # Check every 30 seconds
+            check_interval_key = "last_whatsapp_db_check"
+            if check_interval_key not in st.session_state:
+                st.session_state[check_interval_key] = 0
+            
+            if time.time() - st.session_state[check_interval_key] > 30:
+                st.session_state[check_interval_key] = time.time()
+                
+                # Check if database file has been updated
+                drive_loader = GoogleDriveLoader()
+                folder_id = "1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw"  # WhatsApp DB folder
+                file_name = "whatsapp_conversations.db"
+                
+                # Get current file modification time
+                current_mod_time = drive_loader.get_file_modified_time(folder_id, file_name)
+                
+                # DEBUG: Show file detection details
+                if DEBUG:
+                    st.sidebar.write("**Debug - File Detection:**")
+                    st.sidebar.write(f"Started monitoring at: {started_at}")
+                    st.sidebar.write(f"Current file mod time: {current_mod_time}")
+                    st.sidebar.write(f"File modified after start? {current_mod_time > started_at if current_mod_time else 'N/A'}")
+                
+                if current_mod_time:
+                    # Check if file was modified after we started monitoring
+                    if current_mod_time > started_at:
+                        # Stage 2: File detected!
+                        if not st.session_state["whatsapp_refresh_monitoring"].get("file_detected", False):
+                            st.session_state["whatsapp_refresh_monitoring"]["file_detected"] = True
+                            st.session_state["whatsapp_refresh_monitoring"]["file_detected_at"] = current_mod_time.strftime("%d/%m/%Y %H:%M:%S")
+                        
+                        st.success("🎉 Nova base de dados WhatsApp detectada! Iniciando atualização dos dados...")
+                        
+                        # Clear cached data to force reload
+                        if hasattr(st.cache_data, 'clear'):
+                            st.cache_data.clear()
+                        
+                        # Clear session state caches
+                        cache_keys_to_clear = []
+                        for key in st.session_state.keys():
+                            if any(cache_key in key.lower() for cache_key in [
+                                'conversation', 'db_', 'sheet_data', 'cached_'
+                            ]):
+                                cache_keys_to_clear.append(key)
+                        
+                        for key in cache_keys_to_clear:
+                            if key in st.session_state:
+                                del st.session_state[key]
+                        
+                        # Stage 3: Data refresh completed!
+                        st.session_state["whatsapp_refresh_monitoring"]["data_refreshed"] = True
+                        st.session_state["whatsapp_refresh_monitoring"]["data_refreshed_at"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                        st.session_state["whatsapp_refresh_monitoring"]["monitoring"] = False
+                        
+                        # Show completion summary
+                        st.balloons()
+                        st.success("✅ **Pipeline Completo!** Novos dados carregados com sucesso!")
+                        
+                        # Add detailed completion info
+                        with st.expander("📊 Resumo da Atualização", expanded=True):
+                            st.write("**Etapas Concluídas:**")
+                            st.write("1. ✅ Notebook Hex executado com sucesso")
+                            st.write("2. ✅ Novo arquivo detectado no Google Drive")
+                            st.write("3. ✅ Dados atualizados na interface")
+                            st.write(f"**Arquivo modificado em:** {st.session_state['whatsapp_refresh_monitoring']['file_detected_at']}")
+                            st.write(f"**Interface atualizada em:** {st.session_state['whatsapp_refresh_monitoring']['data_refreshed_at']}")
+                        
+                        # Force page reload to show new data
+                        time.sleep(3)  # Give user time to see the completion message
+                        st.rerun()
+                else:
+                    # Show monitoring status
+                    elapsed_minutes = (current_time - started_at).total_seconds() / 60
+                    st.sidebar.info(f"🔄 Monitorando atualizações da base WhatsApp há {elapsed_minutes:.1f} minutos")
+                    
+                    # Auto-refresh every 30 seconds while monitoring
+                    st.rerun()
+        else:
+            # Stop monitoring after 30 minutes
+            st.session_state["whatsapp_refresh_monitoring"]["monitoring"] = False
+            st.sidebar.warning("⏰ Monitoramento de atualizações encerrado (30 min). Use o botão novamente se necessário.")
+    
+    except Exception as e:
+        st.session_state["whatsapp_refresh_monitoring"]["monitoring"] = False
+        if DEBUG:
+            st.sidebar.error(f"Error monitoring WhatsApp database updates: {e}")

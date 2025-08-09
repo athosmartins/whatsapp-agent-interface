@@ -343,7 +343,15 @@ class BackgroundOperationsManager:
         sheet_name = data.get('sheet_name', 'report')
         essential_fields = data.get('essential_fields', {})
         
+        # CRITICAL DEBUG: Log what we received
+        print(f"🔍 BACKGROUND SYNC DEBUG: Received data = {data}")
+        print(f"🔍 BACKGROUND SYNC DEBUG: sync_data = {sync_data}")
+        print(f"🔍 BACKGROUND SYNC DEBUG: whatsapp_number = {whatsapp_number}")
+        print(f"🔍 BACKGROUND SYNC DEBUG: sync_data type = {type(sync_data)}")
+        print(f"🔍 BACKGROUND SYNC DEBUG: sync_data bool = {bool(sync_data)}")
+        
         if not sync_data or not whatsapp_number:
+            print(f"❌ BACKGROUND SYNC ERROR: Missing data - sync_data={bool(sync_data)}, whatsapp_number={bool(whatsapp_number)}")
             raise ValueError("Missing required data for sync operation")
         
         # Update progress

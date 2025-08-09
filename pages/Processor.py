@@ -1016,6 +1016,11 @@ def initialize_session_state():
         try:
             if "master_df" not in st.session_state:
                 st.session_state.master_df = load_data()
+            # CRITICAL FIX: Always ensure spreadsheet data is merged on fresh loads
+            # This fixes the regression where navigation loses spreadsheet data
+            elif len(st.session_state.master_df) > 0 and 'Nome' not in st.session_state.master_df.columns:
+                print("⚠️ REGRESSION FIX: master_df missing spreadsheet data, reloading...")
+                st.session_state.master_df = load_data(force_load_spreadsheet=False)
 
             # Initialize original_db_data (store the original database values)
             if "original_db_data" not in st.session_state:
@@ -1340,10 +1345,49 @@ if ("processor_navigation_context" in st.session_state and
         ]
     
     if not current_conversation_match.empty:
+        # CRITICAL FIX: Ensure conversation data includes spreadsheet merge
+        # This prevents "Nome esperado" from being blank after navigation
+        conversation_copy = current_conversation_match.copy()
+        
+        # Check if this conversation has spreadsheet data (Nome column)
+        if 'Nome' not in conversation_copy.columns or conversation_copy['Nome'].isna().all():
+            print("⚠️ NAVIGATION FIX: Conversation missing spreadsheet data, attempting merge...")
+            # Get fresh data with spreadsheet merge for this specific conversation
+            fresh_df = load_data(force_load_spreadsheet=False)
+            
+            # Safe phone number extraction - try different column names
+            phone_number = None
+            for col in ['whatsapp_number', 'phone_number', 'conversation_id']:
+                if col in conversation_copy.columns:
+                    phone_number = conversation_copy.iloc[0][col]
+                    break
+            
+            if phone_number:
+                # Find the same conversation in the fresh merged data
+                fresh_match = None
+                for col in ['whatsapp_number', 'phone_number', 'conversation_id']:
+                    if col in fresh_df.columns:
+                        fresh_match = fresh_df[fresh_df[col] == phone_number]
+                        if not fresh_match.empty:
+                            break
+                
+                if fresh_match is not None and not fresh_match.empty and 'Nome' in fresh_match.columns:
+                    # Use the fresh merged data instead
+                    conversation_copy = fresh_match.copy()
+                    print(f"✅ NAVIGATION FIX: Retrieved spreadsheet data for conversation {phone_number}")
+                else:
+                    print(f"⚠️ NAVIGATION FIX: Could not find spreadsheet data for {phone_number}")
+            else:
+                print("⚠️ NAVIGATION FIX: Could not identify phone number column for merge")
+        
         # Replace the master_df with just this conversation for display
-        st.session_state.master_df = current_conversation_match.copy()
+        st.session_state.master_df = conversation_copy
         df = st.session_state.master_df  # Update our local reference
         st.session_state.idx = 0  # Always index 0 since we have just one row
+        
+        # CRITICAL FIX: Ensure original values are properly set for sync operations
+        # This fixes "Missing required data for sync operation" error during navigation
+        store_original_values(0, st.session_state.master_df.iloc[0])
         
         # ALWAYS show debug info to track what's happening
         print(f"✅ NAVIGATION SUCCESS: Found and loaded conversation {current_url_conversation_id}")
@@ -2791,7 +2835,10 @@ with contact_container.container():
         if HIGHLIGHT_ENABLE
         else row.get("display_name", "")
     )
-    expected_name = highlight(row.get("expected_name", ""), hl_words)
+    # CRITICAL FIX: Use "Nome" field from spreadsheet merge for Nome Esperado
+    nome_value = row.get("Nome", "")
+    nome_str = str(nome_value) if pd.notna(nome_value) else ""
+    expected_name = highlight(nome_str, hl_words) if nome_str.strip() else highlight(row.get("expected_name", ""), hl_words)
     familiares_list = parse_familiares_grouped(row.get("familiares", ""))
     age = row.get("IDADE")
     age_text = ""
@@ -3763,7 +3810,32 @@ with sync_col:
     if st.button("📋 Sync Sheet", key="bottom_sync", use_container_width=True):
         # Get current record data
         current_row = st.session_state.master_df.iloc[idx]
-        whatsapp_number = current_row.get("whatsapp_number", "")
+        
+        # CRITICAL FIX: Get phone number using the same robust logic used elsewhere
+        # Don't just use whatsapp_number column, try multiple sources
+        raw_whatsapp_number = ""
+        phone_sources = [
+            current_row.get("whatsapp_number", ""),  # Database main column
+            current_row.get("Phone number", ""),     # From spreadsheet sync
+            current_row.get("phone", ""),
+            current_row.get("phone_number", ""),
+            current_row.get("celular", ""),          # Portuguese column
+            current_row.get("conversation_id", "")   # Last resort - conversation_id might be phone
+        ]
+        
+        # Use the first non-empty phone source
+        for source in phone_sources:
+            if source and str(source).strip():
+                raw_whatsapp_number = str(source).strip()
+                break
+        
+        # Clean phone number: remove @s.whatsapp.net and format properly
+        if raw_whatsapp_number:
+            whatsapp_number = raw_whatsapp_number.split('@')[0] if '@' in raw_whatsapp_number else raw_whatsapp_number
+            # Remove any non-digit characters except +
+            whatsapp_number = ''.join(c for c in whatsapp_number if c.isdigit() or c == '+')
+        else:
+            whatsapp_number = ""
 
         # Prepare data to sync with correct column mappings (exclude resposta and standby)
         def format_list_field(field_value):
@@ -3823,7 +3895,7 @@ with sync_col:
 
         # SIMPLIFIED SYNC: Use the same logic as the working display system
         def detect_changed_fields_for_sync():
-            """Detect changed fields using the same proven logic as the display system."""
+            """Detect changed fields using current widget state, not master_df."""
             changed_fields = {}
             
             # Only proceed if we have original values stored (same as display system)
@@ -3831,9 +3903,41 @@ with sync_col:
                 return changed_fields
                 
             original = st.session_state.original_values[idx]
-            current = st.session_state.master_df.iloc[idx].to_dict()
+            
+            # CRITICAL FIX: Get current values from widget state, NOT from master_df
+            # This matches how the modification display system works
+            def get_current_widget_value(field):
+                """Get current value from widget state or fallback to master_df."""
+                widget_keys = {
+                    "classificacao": f"classificacao_select_{idx}",
+                    "intencao": f"intencao_select_{idx}", 
+                    "acoes_urblink": f"acoes_select_{idx}",
+                    "status_urblink": f"status_select_{idx}",
+                    "pagamento": f"pagamento_select_{idx}",
+                    "percepcao_valor_esperado": f"percepcao_select_{idx}",
+                    "razao_standby": f"razao_select_{idx}",
+                    "resposta": f"resposta_input_{idx}",
+                    "obs": f"obs_input_{idx}",
+                    "stakeholder": f"stakeholder_input_{idx}",
+                    "intermediador": f"intermediador_input_{idx}",
+                    "inventario_flag": f"inventario_input_{idx}",
+                    "standby": f"standby_input_{idx}",
+                    "followup_date": f"followup_date_{idx}",  # FIXED: Correct widget key for fup_date
+                    # Add any other fields that have widgets
+                }
+                
+                widget_key = widget_keys.get(field)
+                if widget_key and widget_key in st.session_state:
+                    return st.session_state[widget_key]
+                else:
+                    # CRITICAL DEBUG: Log missing widget keys
+                    print(f"🔍 WIDGET DEBUG: Field '{field}' widget key '{widget_key}' not found in session_state")
+                    print(f"   Available keys matching field: {[k for k in st.session_state.keys() if field in k.lower()]}")
+                    # Fallback to master_df if widget not found
+                    return st.session_state.master_df.iloc[idx].get(field, "")
             
             # Field mapping from database field name to spreadsheet column name
+            # This mapping should match the actual Google Sheet column headers
             field_to_spreadsheet_mapping = {
                 "classificacao": "Classificação do dono do número",
                 "intencao": "status_manual", 
@@ -3848,17 +3952,44 @@ with sync_col:
                 "intermediador": "intermediador", 
                 "inventario_flag": "imovel_em_inventario",
                 "standby": "standby",
-                "followup_date": "fup_date",  # Fix for follow-up date sync
+                "followup_date": "fup_date",
+                # Note: removed imovel_anunciado - doesn't exist as form widget
+                "assunto_fup": "assunto_fup",
+                "mensagem_fup": "mensagem_fup[automatizado]",
+                "conforme": "conforme?",
+                "motivo_inconformidade": "motivo inconformidade",
             }
             
-            # Use the same comparison logic as the display system
+            # Check each field against its current widget value
             for field in original:
-                if field in current and not compare_values(original[field], current[field]):
+                current_value = get_current_widget_value(field)
+                original_value = original[field]
+                
+                # CRITICAL DEBUG: Always log field processing for troubleshooting
+                print(f"🔍 SYNC FIELD DEBUG: Processing field '{field}'")
+                print(f"   Original value: {repr(original_value)} (type: {type(original_value)})")
+                print(f"   Current value: {repr(current_value)} (type: {type(current_value)})")
+                print(f"   Values match: {compare_values(original_value, current_value)}")
+                
+                # SPECIAL DEBUG: Check boolean fields specifically
+                if field in ["stakeholder", "intermediador", "inventario_flag", "standby"]:
+                    # Recreate widget key mapping for debugging
+                    widget_key_map = {
+                        "stakeholder": f"stakeholder_input_{idx}",
+                        "intermediador": f"intermediador_input_{idx}",
+                        "inventario_flag": f"inventario_input_{idx}",
+                        "standby": f"standby_input_{idx}",
+                    }
+                    widget_key = widget_key_map.get(field)
+                    widget_value = st.session_state.get(widget_key, "NOT_FOUND")
+                    print(f"   🔘 BOOLEAN DEBUG: widget_key='{widget_key}', widget_value={repr(widget_value)}")
+                    print(f"   🔘 BOOLEAN DEBUG: Widget found in session: {widget_key in st.session_state if widget_key else False}")
+                
+                if not compare_values(original_value, current_value):
                     # Map to spreadsheet column name if available
                     spreadsheet_field = field_to_spreadsheet_mapping.get(field, field)
                     
                     # Format the value appropriately for spreadsheet
-                    current_value = current[field]
                     if isinstance(current_value, bool):
                         formatted_value = "TRUE" if current_value else "FALSE"
                     elif isinstance(current_value, list):
@@ -3868,11 +3999,15 @@ with sync_col:
                     
                     changed_fields[spreadsheet_field] = formatted_value
                     
+                    print(f"   ✅ FIELD CHANGED: Will sync to '{spreadsheet_field}' = {repr(formatted_value)}")
+                    
                     if DEV and DEBUG:
                         st.write(f"🔄 Sync will update: {spreadsheet_field}")
-                        st.write(f"   Original: {repr(original[field])}")
-                        st.write(f"   Current: {repr(current[field])}")
+                        st.write(f"   Original: {repr(original_value)}")
+                        st.write(f"   Current (from widget): {repr(current_value)}")
                         st.write(f"   Formatted for sync: {repr(formatted_value)}")
+                else:
+                    print(f"   ⏸️ FIELD UNCHANGED: Skipping '{field}'")
             
             # Special handling for property assignment fields (always include if assigned_property exists)
             if assigned_property:
@@ -3895,16 +4030,27 @@ with sync_col:
         # Get only the changed fields using the same logic as display system
         sync_data = detect_changed_fields_for_sync()
         
-        # Show debug info about sync detection
-        if DEV and DEBUG and sync_data:
-            st.write(f"**Sync system detected {len(sync_data)} changed field(s):**")
-            for field, value in sync_data.items():
-                st.write(f"  {field}: {repr(value)}")
+        # CRITICAL DEBUG: Always show sync data for debugging
+        print(f"🔍 SYNC DEBUG: sync_data = {sync_data}")
+        print(f"🔍 SYNC DEBUG: whatsapp_number = {whatsapp_number}")
+        print(f"🔍 SYNC DEBUG: phone_sources = {[current_row.get(col, '') for col in ['whatsapp_number', 'Phone number', 'phone', 'phone_number', 'celular', 'conversation_id']]}")
+        print(f"🔍 SYNC DEBUG: sync_data type = {type(sync_data)}")
+        print(f"🔍 SYNC DEBUG: sync_data length = {len(sync_data) if sync_data else 'None/Empty'}")
         
-        # If no fields changed, show message and exit
-        if not sync_data:
+        # Validate we have required data BEFORE attempting sync
+        if not whatsapp_number:
+            st.error("❌ No phone number found for sync operation. Check conversation data.")
+            print("🔍 SYNC DEBUG: Exiting because whatsapp_number is empty")
+        elif not sync_data:
             st.info("ℹ️ No changes detected. Nothing to sync.")
+            print("🔍 SYNC DEBUG: Exiting because sync_data is empty")
         else:
+            # Show debug info about sync detection
+            if DEV and DEBUG and sync_data:
+                st.write(f"**Sync system detected {len(sync_data)} changed field(s):**")
+                for field, value in sync_data.items():
+                    st.write(f"  {field}: {repr(value)}")
+            
             # Add essential fields for row identification and creation if needed
             # These are only added if the row doesn't exist in the spreadsheet
             essential_fields = {
@@ -4136,8 +4282,12 @@ if hasattr(
                             display_parts = []
 
                             # Always include expected_name (or fallback to display_name)
+                            # CRITICAL FIX: Use "Nome" field from spreadsheet for expected name
                             expected_name = (
-                                conv_row.get("expected_name", "")
+                                conv_row.get("Nome", "")
+                                if conv_row.get("Nome", "")
+                                and conv_row.get("Nome", "").strip()
+                                else conv_row.get("expected_name", "")
                                 if conv_row.get("expected_name", "")
                                 and conv_row.get("expected_name", "").strip()
                                 else conv_row.get("display_name", "")

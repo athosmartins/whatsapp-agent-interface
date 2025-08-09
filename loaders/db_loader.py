@@ -267,13 +267,14 @@ def get_conversations_summary() -> pd.DataFrame:
             tables = [row[0] for row in cursor.fetchall()]
             
             if 'conversations' in tables and 'messages' in tables:
-                # Use conversations table with actual message counts from messages table
+                # CRITICAL FIX: Use simple approach to maintain spreadsheet compatibility
+                # First get basic conversation data (preserves original structure for merge)
                 query = """
                 SELECT 
                     c.conversation_id,
                     c.display_name,
                     c.phone_number,
-                    COALESCE(m.actual_message_count, 0) as total_messages,
+                    COALESCE(m.actual_message_count, c.total_messages, 0) as total_messages,
                     c.last_message_timestamp,
                     c.PictureUrl,
                     c.archived,
@@ -286,26 +287,69 @@ def get_conversations_summary() -> pd.DataFrame:
                 ) m ON c.conversation_id = m.conversation_id
                 ORDER BY c.last_message_timestamp DESC
                 """
+                
+                # Get the base conversation data
+                df = pd.read_sql_query(query, conn)
+                
+                # Add last message data separately to avoid breaking merge logic
+                if len(df) > 0:
+                    # Get last message content for each conversation
+                    last_message_query = """
+                    SELECT DISTINCT
+                        m1.conversation_id,
+                        m1.message_text as last_message,
+                        m1.datetime_brt as last_message_datetime_brt
+                    FROM messages m1
+                    INNER JOIN (
+                        SELECT conversation_id, MAX(timestamp) as max_timestamp
+                        FROM messages
+                        GROUP BY conversation_id
+                    ) m2 ON m1.conversation_id = m2.conversation_id 
+                         AND m1.timestamp = m2.max_timestamp
+                    """
+                    
+                    try:
+                        last_message_df = pd.read_sql_query(last_message_query, conn)
+                        # Merge last message data with main df
+                        df = df.merge(last_message_df, on='conversation_id', how='left')
+                        # Fill NaN values with empty strings
+                        df['last_message'] = df['last_message'].fillna('')
+                        df['last_message_datetime_brt'] = df['last_message_datetime_brt'].fillna('')
+                    except Exception as e:
+                        print(f"Warning: Could not add last message data: {e}")
+                        # Add empty columns as fallback
+                        df['last_message'] = ''
+                        df['last_message_datetime_brt'] = ''
+                else:
+                    # Add empty columns for consistency
+                    df['last_message'] = ''
+                    df['last_message_datetime_brt'] = ''
+                
+                return df
+                
             elif 'conversations' in tables:
                 # Fall back to conversations table only
                 query = """
                 SELECT conversation_id, display_name, phone_number, 
                        total_messages, last_message_timestamp, PictureUrl,
-                       archived, unread_count
+                       archived, unread_count,
+                       '' as last_message, '' as last_message_datetime_brt
                 FROM conversations 
                 ORDER BY last_message_timestamp DESC
                 """
+                df = pd.read_sql_query(query, conn)
+                
             else:
                 # Use deepseek_results table
                 query = f"""
                 SELECT conversation_id, display_name, phone_number, 
                        COALESCE(total_messages, 0) as total_messages, 
-                       last_message_timestamp, PictureUrl
+                       last_message_timestamp, PictureUrl,
+                       '' as last_message, '' as last_message_datetime_brt
                 FROM {TABLE} 
                 ORDER BY last_message_timestamp DESC
                 """
-            
-            df = pd.read_sql_query(query, conn)
+                df = pd.read_sql_query(query, conn)
             
         except Exception as e:
             print(f"Error in get_conversations_summary: {e}")
@@ -321,6 +365,10 @@ def get_conversations_summary() -> pd.DataFrame:
                     df['conversation_id'] = df['whatsapp_number']
                 if 'phone_number' not in df.columns and 'whatsapp_number' in df.columns:
                     df['phone_number'] = df['whatsapp_number']
+                if 'last_message' not in df.columns:
+                    df['last_message'] = ''
+                if 'last_message_datetime_brt' not in df.columns:
+                    df['last_message_datetime_brt'] = ''
                 if 'PictureUrl' not in df.columns:
                     df['PictureUrl'] = ''
                     
@@ -422,7 +470,7 @@ def get_conversations_with_sheets_data(force_load_spreadsheet: bool = False) -> 
         # Load conversations summary
         conversations_df = get_conversations_summary()
         
-        # Load Google Sheets data with controlled loading
+        # Load Google Sheets data using restored simple caching
         from services.spreadsheet import get_sheet_data
         sheet_data = get_sheet_data(force_load=force_load_spreadsheet)
         

@@ -567,3 +567,56 @@ The Processor page's 'anterior'/'proximo' buttons currently navigate through all
 - Navigation context system from Conversations page was already sophisticated and working correctly
 - The issue was UI implementation (button disabled state) rather than navigation logic
 - Top and bottom navigation buttons had different implementations - bottom ones were working correctly
+
+---
+
+## Story #010: Automatic WhatsApp Database Refresh with Hex Integration - **COMPLETED**
+
+**Problem:** 
+Currently, the WhatsApp conversations database (whatsapp_conversations.db) must be manually updated, which creates delays in processing new conversations and requires manual intervention. The system needs an automated way to trigger the backend data processing via Hex notebook and automatically refresh the frontend when new data is available.
+
+**Why it's important:**
+- Manual database updates create workflow interruptions and delays
+- Users miss processing new conversations until manual refresh is performed
+- Real-time conversation processing requires automated data pipeline
+- Table display needs better organization and more informative columns for efficient workflow
+
+**Success criteria:**
+- Button to automatically trigger Hex notebook execution (ID: 01960af1-2d2e-7004-b492-1a7977cce023)
+- Monitor Google Drive folder for whatsapp_conversations.db file updates
+- Automatically refresh frontend dataframe when new database file is detected
+- Add "last message" column showing the most recent message content from each conversation
+- Add "last message timestamp" column in BRT timezone with format '08/Aug 14h35m22s'
+- Reorganize Conversations table column order: display_name, classificacao, bairro, endereco, last_message, last_message_timestamp, complemento_endereco, phone_number, cpf
+
+**Tasks to accomplish:**
+- [x] Analyze current Hex API integration and notebook execution capabilities
+- [x] Implement Hex notebook execution trigger for database refresh
+- [x] Add Google Drive file monitoring to detect whatsapp_conversations.db updates
+- [x] Extract last message and timestamp information from conversation data
+- [x] Add new columns (last_message, last_message_timestamp) to Conversations table
+- [x] Reorganize Conversations table column order as specified
+- [x] Implement frontend refresh mechanism when new data is detected
+- [x] Test complete workflow from button click to refreshed display
+
+**Tests needed to verify completion:**
+- [x] Verify button successfully triggers Hex notebook execution
+- [x] Confirm Google Drive monitoring detects database file changes
+- [x] Test frontend automatically refreshes with new conversation data
+- [x] Verify last message content displays correctly for each conversation
+- [x] Verify timestamp formatting in BRT timezone as '08/Aug 14h35m22s'
+- [x] Confirm table column order matches specification
+- [x] Test complete end-to-end workflow from trigger to display
+
+**Main problems encountered:**
+- Hex API integration needed modification to handle notebook execution without requiring dataframe input
+- Database schema updates required careful handling of fallback queries for different table structures
+- Timestamp formatting needed robust parsing for different datetime formats from the database
+- Google Drive API monitoring required proper authentication handling and error management
+
+**Lessons learned:**
+- Hex notebook execution can be triggered without input parameters using dedicated API functions
+- Database schema evolution requires comprehensive fallback handling to maintain compatibility
+- Real-time monitoring systems need proper timeout and error handling to avoid infinite loops
+- Table column reorganization benefits from explicit ordering rather than incremental additions
+- Frontend cache invalidation is crucial for reflecting updated data after background processing
