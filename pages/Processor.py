@@ -25,6 +25,7 @@ from config import (
 from loaders.db_loader import get_dataframe, get_db_info, get_conversation_messages
 from services.spreadsheet import sync_record_to_sheet, format_phone_for_storage, format_address_field
 from services.voxuy_api import send_whatsapp_message
+from services.familiares_loader import get_familiares_by_cpf, get_familiares_by_phone
 from services.background_operations import (
     queue_sync_operation,
     queue_archive_operation,
@@ -2839,7 +2840,23 @@ with contact_container.container():
     nome_value = row.get("Nome", "")
     nome_str = str(nome_value) if pd.notna(nome_value) else ""
     expected_name = highlight(nome_str, hl_words) if nome_str.strip() else highlight(row.get("expected_name", ""), hl_words)
-    familiares_list = parse_familiares_grouped(row.get("familiares", ""))
+    # Try to get familiares data from the dedicated familiares spreadsheet
+    familiares_raw = row.get("familiares", "")
+    
+    # If no familiares data in current row, try to fetch from familiares spreadsheet
+    if not familiares_raw or pd.isna(familiares_raw) or str(familiares_raw).strip() == "":
+        # Try by CPF first
+        cpf = row.get("cpf", "") or row.get("CPF", "")
+        if cpf and not pd.isna(cpf) and str(cpf).strip():
+            familiares_raw = get_familiares_by_cpf(str(cpf).strip())
+        
+        # If still no data, try by phone number
+        if not familiares_raw:
+            phone = row.get("phone_number", "") or row.get("whatsapp_number", "")
+            if phone and not pd.isna(phone) and str(phone).strip():
+                familiares_raw = get_familiares_by_phone(str(phone).strip())
+    
+    familiares_list = parse_familiares_grouped(familiares_raw)
     age = row.get("IDADE")
     age_text = ""
     if pd.notna(age) and str(age).strip() and str(age).strip() != "":

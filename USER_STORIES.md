@@ -620,3 +620,57 @@ Currently, the WhatsApp conversations database (whatsapp_conversations.db) must 
 - Real-time monitoring systems need proper timeout and error handling to avoid infinite loops
 - Table column reorganization benefits from explicit ordering rather than incremental additions
 - Frontend cache invalidation is crucial for reflecting updated data after background processing
+
+## Story #012: Family Relationship Data Integration (Familiares) - **COMPLETED**
+
+**Problem:** 
+The "Familiares" section in the Processor page's "Informações Pessoais" was always empty, showing no family relationship data for any contacts. Users needed to see family members and their relationships to better understand contact profiles and make informed decisions.
+
+**Why it was important:**
+- Family information is crucial for real estate lead qualification and relationship mapping
+- Users were missing important context about contacts' family structures  
+- The existing familiares field was never populated from any data source
+- Complete family relationship data exists but wasn't accessible in the interface
+
+**Tasks accomplished:**
+1. ✅ Investigated existing familiares data flow and identified missing integration
+2. ✅ Discovered dedicated familiares spreadsheet with 15,956 family relationship records
+3. ✅ Created `services/familiares_loader.py` service for family data integration
+4. ✅ Configured Google Sheets API access for familiares spreadsheet (ID: 1m4vrMjZvAW7KS1T9jtsFC5tpOlRDKNagfQilTeBQ5gE)
+5. ✅ Implemented CPF-based family lookup with proper zero-padding and matching
+6. ✅ Added relationship grouping logic (MAE, PAI, FILHO, etc.)
+7. ✅ Integrated familiares service into Processor page with automatic fallback
+8. ✅ Added phone-based lookup as secondary matching method
+
+**Main problems during development:**
+- Initial Google Sheets API permission denied errors (resolved by using correct scopes)
+- Understanding the familiares spreadsheet structure (CPF_RELACIONADO, RELACAO, NOME columns)
+- Implementing proper CPF formatting and matching with leading zeros
+- Integrating with existing parse_familiares_grouped function
+
+**What we learned:**
+- Family relationship data structure: CPF_RELACIONADO → RELACAO → NOME mapping
+- Importance of consistent CPF formatting (11-digit zero-padded) for accurate matching
+- Google Sheets API requires 'spreadsheets' scope (not 'spreadsheets.readonly') for service accounts
+- Family data can be grouped and formatted for better UX display
+
+**Tests that confirmed completion:**
+- Familiares spreadsheet accessible with 15,956 relationship records
+- CPF-based lookup returns formatted family relationships
+- Integration displays family data in Processor page "Familiares" section
+- Automatic fallback from CPF to phone number lookup works
+- Family relationships properly grouped by type (MAE: Maria Silva, FILHO: João Silva, Pedro Silva)
+
+**Commit message:**
+```
+feat: integrate family relationship data (familiares) from dedicated spreadsheet
+
+- Add familiares_loader service to fetch family data from Google Sheets (1m4vrMjZvAW7KS1T9jtsFC5tpOlRDKNagfQilTeBQ5gE)
+- Implement CPF-based family lookup with zero-padding and relationship grouping  
+- Integrate familiares service into Processor page with automatic phone fallback
+- Display formatted family relationships in "Informações Pessoais" section
+
+🤖 Generated with [Claude Code](https://claude.ai/code)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
