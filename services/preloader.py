@@ -64,12 +64,22 @@ class BackgroundPreloader:
             self.preload_threads['spreadsheet'].start()
     
     def _preload_database(self):
-        """Preload database file."""
+        """Preload database file - only download if not already present."""
         try:
             print("📊 Preloading database...")
             self.preload_status['database']['status'] = 'loading'
             
-            # Only ensure database is downloaded, avoid Streamlit cache operations
+            # Check if database already exists to avoid unnecessary downloads
+            import os
+            db_path = "/tmp/whatsapp_conversations.db" if os.getenv("STREAMLIT_SERVER_HEADLESS") else "whatsapp_conversations.db"
+            
+            if os.path.exists(db_path):
+                print(f"⏭️ Database already exists, skipping download: {db_path}")
+                self.preload_status['database']['status'] = 'complete'
+                print("✅ Database preload complete (existing file)")
+                return
+            
+            # Only download if database doesn't exist
             _ensure_db()
             
             # Note: get_dataframe() uses @st.cache_data which requires Streamlit context

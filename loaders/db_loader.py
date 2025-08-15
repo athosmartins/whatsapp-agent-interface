@@ -9,6 +9,9 @@ import duckdb
 # Import centralized phone utilities
 from services.phone_utils import clean_phone_for_matching, generate_phone_variants
 
+# Import debug logging
+from services.debug_logger import debug_log
+
 GDRIVE_FILE_ID   = "1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw"   # snapshot folder/file ID
 LOCAL_DB_PATH    = "whatsapp_conversations.db"           # always the same name
 TABLE            = "deepseek_results"                    # what the UI expects
@@ -56,13 +59,13 @@ def _download_from_drive(dest: str):
         
         print("Finding newest database file on Google Drive...")
         
-        # List files in the folder, ordered by creation time (newest first)
+        # List files in the folder, ordered by modification time (newest first)
         folder_id = "1xvleAGsC8qJnM8Kim5MEAG96-2nhcAxw"
         query = f"'{folder_id}' in parents and trashed=false and name contains '.db'"
         results = drive_service.files().list(
             q=query,
-            orderBy='createdTime desc',
-            fields='files(id, name, createdTime)',
+            orderBy='modifiedTime desc',
+            fields='files(id, name, createdTime, modifiedTime)',
             pageSize=10  # Only get top 10 files
         ).execute()
         
@@ -77,7 +80,7 @@ def _download_from_drive(dest: str):
         file_id = newest_file['id']
         file_name = newest_file['name']
         
-        print(f"Downloading newest file: {file_name} (created: {newest_file['createdTime']})")
+        print(f"Downloading newest file: {file_name} (created: {newest_file['createdTime']}, modified: {newest_file.get('modifiedTime', 'N/A')})")
         
         # Download only this specific file
         request = drive_service.files().get_media(fileId=file_id)
@@ -260,124 +263,93 @@ def get_conversations_summary() -> pd.DataFrame:
     """Load conversations table with actual message counts calculated from messages table."""
     db_path = _ensure_db()
     with sqlite3.connect(db_path) as conn:
+        # Check what tables exist
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+        tables = [row[0] for row in cursor.fetchall()]
+        
+        debug_log(f"Available tables: {tables}")
+        
+        # REQUIRE conversations table - no fallbacks
+        if 'conversations' not in tables:
+            raise Exception(f"Required 'conversations' table not found in database. Available tables: {tables}")
+        
+        debug_log("Using conversations + messages tables")
+        
+        # Main query to get conversation data with message counts
+        query = """
+        SELECT 
+            c.conversation_id,
+            c.display_name,
+            c.phone_number,
+            COALESCE(m.actual_message_count, c.total_messages, 0) as total_messages,
+            c.last_message_timestamp,
+            c.PictureUrl,
+            c.archived,
+            c.unread_count
+        FROM conversations c
+        LEFT JOIN (
+            SELECT conversation_id, COUNT(*) as actual_message_count
+            FROM messages
+            GROUP BY conversation_id
+        ) m ON c.conversation_id = m.conversation_id
+        ORDER BY c.last_message_timestamp DESC
+        """
+        
+        # Get the base conversation data
+        df = pd.read_sql_query(query, conn)
+        debug_log(f"Loaded {len(df)} conversations from database")
+        
+        # DEBUG: Check all records for our target phone number
         try:
-            # Check what tables exist
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
-            tables = [row[0] for row in cursor.fetchall()]
-            
-            if 'conversations' in tables and 'messages' in tables:
-                # CRITICAL FIX: Use simple approach to maintain spreadsheet compatibility
-                # First get basic conversation data (preserves original structure for merge)
-                query = """
-                SELECT 
-                    c.conversation_id,
-                    c.display_name,
-                    c.phone_number,
-                    COALESCE(m.actual_message_count, c.total_messages, 0) as total_messages,
-                    c.last_message_timestamp,
-                    c.PictureUrl,
-                    c.archived,
-                    c.unread_count
-                FROM conversations c
-                LEFT JOIN (
-                    SELECT conversation_id, COUNT(*) as actual_message_count
-                    FROM messages
-                    GROUP BY conversation_id
-                ) m ON c.conversation_id = m.conversation_id
-                ORDER BY c.last_message_timestamp DESC
-                """
-                
-                # Get the base conversation data
-                df = pd.read_sql_query(query, conn)
-                
-                # Add last message data separately to avoid breaking merge logic
-                if len(df) > 0:
-                    # Get last message content for each conversation
-                    last_message_query = """
-                    SELECT DISTINCT
-                        m1.conversation_id,
-                        m1.message_text as last_message,
-                        m1.datetime_brt as last_message_datetime_brt
-                    FROM messages m1
-                    INNER JOIN (
-                        SELECT conversation_id, MAX(timestamp) as max_timestamp
-                        FROM messages
-                        GROUP BY conversation_id
-                    ) m2 ON m1.conversation_id = m2.conversation_id 
-                         AND m1.timestamp = m2.max_timestamp
-                    """
-                    
-                    try:
-                        last_message_df = pd.read_sql_query(last_message_query, conn)
-                        # Merge last message data with main df
-                        df = df.merge(last_message_df, on='conversation_id', how='left')
-                        # Fill NaN values with empty strings
-                        df['last_message'] = df['last_message'].fillna('')
-                        df['last_message_datetime_brt'] = df['last_message_datetime_brt'].fillna('')
-                    except Exception as e:
-                        print(f"Warning: Could not add last message data: {e}")
-                        # Add empty columns as fallback
-                        df['last_message'] = ''
-                        df['last_message_datetime_brt'] = ''
-                else:
-                    # Add empty columns for consistency
-                    df['last_message'] = ''
-                    df['last_message_datetime_brt'] = ''
-                
-                return df
-                
-            elif 'conversations' in tables:
-                # Fall back to conversations table only
-                query = """
-                SELECT conversation_id, display_name, phone_number, 
-                       total_messages, last_message_timestamp, PictureUrl,
-                       archived, unread_count,
-                       '' as last_message, '' as last_message_datetime_brt
-                FROM conversations 
-                ORDER BY last_message_timestamp DESC
-                """
-                df = pd.read_sql_query(query, conn)
-                
+            debug_query = """
+            SELECT conversation_id, phone_number, archived, display_name, last_message_timestamp
+            FROM conversations 
+            WHERE phone_number LIKE '%553184544605%'
+            ORDER BY last_message_timestamp DESC
+            """
+            debug_df = pd.read_sql_query(debug_query, conn)
+            if not debug_df.empty:
+                debug_log(f"ALL database records for 553184544605:")
+                for idx, row in debug_df.iterrows():
+                    debug_log(f"  Record {idx+1}: conversation_id={row['conversation_id']}, archived={row['archived']}, display_name={row['display_name']}, timestamp={row['last_message_timestamp']}")
             else:
-                # Use deepseek_results table
-                query = f"""
-                SELECT conversation_id, display_name, phone_number, 
-                       COALESCE(total_messages, 0) as total_messages, 
-                       last_message_timestamp, PictureUrl,
-                       '' as last_message, '' as last_message_datetime_brt
-                FROM {TABLE} 
-                ORDER BY last_message_timestamp DESC
-                """
-                df = pd.read_sql_query(query, conn)
+                debug_log("No database records found for 553184544605")
+        except Exception as debug_e:
+            debug_log(f"Debug query failed: {debug_e}")
+        
+        # Add last message data if messages table exists
+        if 'messages' in tables and len(df) > 0:
+            last_message_query = """
+            SELECT 
+                conversation_id,
+                message_text as last_message,
+                datetime_brt as last_message_datetime_brt
+            FROM (
+                SELECT 
+                    conversation_id,
+                    message_text,
+                    datetime_brt,
+                    ROW_NUMBER() OVER (PARTITION BY conversation_id ORDER BY timestamp DESC, message_id DESC) as rn
+                FROM messages
+            ) ranked_messages
+            WHERE rn = 1
+            """
             
-        except Exception as e:
-            print(f"Error in get_conversations_summary: {e}")
-            # Fallback to getting basic data from deepseek_results
             try:
-                query = f"SELECT * FROM {TABLE}"
-                df = pd.read_sql_query(query, conn)
-                
-                # Create the required columns if they don't exist
-                if 'total_messages' not in df.columns:
-                    df['total_messages'] = 0
-                if 'conversation_id' not in df.columns and 'whatsapp_number' in df.columns:
-                    df['conversation_id'] = df['whatsapp_number']
-                if 'phone_number' not in df.columns and 'whatsapp_number' in df.columns:
-                    df['phone_number'] = df['whatsapp_number']
-                if 'last_message' not in df.columns:
-                    df['last_message'] = ''
-                if 'last_message_datetime_brt' not in df.columns:
-                    df['last_message_datetime_brt'] = ''
-                if 'PictureUrl' not in df.columns:
-                    df['PictureUrl'] = ''
-                    
-            except Exception as e2:
-                print(f"Fallback also failed: {e2}")
-                # Return empty DataFrame with expected columns
-                df = pd.DataFrame(columns=['conversation_id', 'display_name', 'phone_number', 'total_messages', 'last_message_timestamp', 'PictureUrl'])
-                
-    return df
+                last_message_df = pd.read_sql_query(last_message_query, conn)
+                df = df.merge(last_message_df, on='conversation_id', how='left')
+                df['last_message'] = df['last_message'].fillna('')
+                df['last_message_datetime_brt'] = df['last_message_datetime_brt'].fillna('')
+            except Exception as e:
+                debug_log(f"Warning: Could not add last message data: {e}")
+                df['last_message'] = ''
+                df['last_message_datetime_brt'] = ''
+        else:
+            df['last_message'] = ''
+            df['last_message_datetime_brt'] = ''
+        
+        return df
 
 def get_conversation_messages(conversation_id: str) -> pd.DataFrame:
     """Load full conversation messages for a specific conversation_id."""
@@ -470,6 +442,17 @@ def get_conversations_with_sheets_data(force_load_spreadsheet: bool = False) -> 
         # Load conversations summary
         conversations_df = get_conversations_summary()
         
+        # DEBUG: Check archived column in conversations_df
+        if 'archived' in conversations_df.columns:
+            archived_values = conversations_df['archived'].value_counts()
+            debug_log(f"conversations_df archived values: {dict(archived_values)}")
+            # Check specific phone number
+            phone_553184544605 = conversations_df[conversations_df['phone_number'].str.contains('553184544605', na=False)]
+            if not phone_553184544605.empty:
+                debug_log(f"Phone 553184544605 archived status in conversations_df: {phone_553184544605['archived'].iloc[0]}")
+        else:
+            debug_log("No 'archived' column in conversations_df")
+        
         # Load Google Sheets data using restored simple caching
         from services.spreadsheet import get_sheet_data
         sheet_data = get_sheet_data(force_load=force_load_spreadsheet)
@@ -496,6 +479,14 @@ def get_conversations_with_sheets_data(force_load_spreadsheet: bool = False) -> 
                     unique_headers.append(header)
             
             sheets_df = pd.DataFrame(data_rows, columns=unique_headers)
+            
+            # DEBUG: Check if Google Sheets has archived column
+            if 'archived' in sheets_df.columns:
+                sheets_archived_values = sheets_df['archived'].value_counts()
+                debug_log(f"Google Sheets has 'archived' column with values: {dict(sheets_archived_values)}")
+            else:
+                debug_log("Google Sheets does NOT have 'archived' column")
+            debug_log(f"Google Sheets columns: {list(sheets_df.columns)}")
             
             # Use centralized phone utilities
             
@@ -549,9 +540,22 @@ def get_conversations_with_sheets_data(force_load_spreadsheet: bool = False) -> 
                                 
                                 # Combine conversation and sheet data
                                 combined_row = conv_row.copy()
+                                
+                                # DEBUG: Check if this is our target phone number
+                                if '553184544605' in str(phone):
+                                    debug_log(f"Processing phone 553184544605 - EXACT match")
+                                    debug_log(f"conv_row archived value: {conv_row.get('archived', 'NOT_FOUND')}")
+                                    if 'archived' in sheet_row.index:
+                                        debug_log(f"sheet_row has archived column with value: {sheet_row['archived']}")
+                                    else:
+                                        debug_log(f"sheet_row does NOT have archived column")
+                                
                                 for col in sheet_row.index:
                                     if col not in combined_row.index:
                                         combined_row[col] = sheet_row[col]
+                                    elif col == 'archived' and '553184544605' in str(phone):
+                                        debug_log(f"CONFLICT! Sheet has archived column, keeping conv value: {combined_row[col]} (not overwriting with {sheet_row[col]})")
+                                
                                 combined_row['match_type'] = 'exact'
                                 
                                 matched_data.append(combined_row)
@@ -570,9 +574,22 @@ def get_conversations_with_sheets_data(force_load_spreadsheet: bool = False) -> 
                                     
                                     # Combine conversation and sheet data
                                     combined_row = conv_row.copy()
+                                    
+                                    # DEBUG: Check if this is our target phone number
+                                    if '553184544605' in str(phone):
+                                        debug_log(f"Processing phone 553184544605 - LAST8 match")
+                                        debug_log(f"conv_row archived value: {conv_row.get('archived', 'NOT_FOUND')}")
+                                        if 'archived' in sheet_row.index:
+                                            debug_log(f"sheet_row has archived column with value: {sheet_row['archived']}")
+                                        else:
+                                            debug_log(f"sheet_row does NOT have archived column")
+                                    
                                     for col in sheet_row.index:
                                         if col not in combined_row.index:
                                             combined_row[col] = sheet_row[col]
+                                        elif col == 'archived' and '553184544605' in str(phone):
+                                            debug_log(f"CONFLICT! Sheet has archived column, keeping conv value: {combined_row[col]} (not overwriting with {sheet_row[col]})")
+                                    
                                     combined_row['match_type'] = 'last8'
                                     
                                     matched_data.append(combined_row)
@@ -590,6 +607,19 @@ def get_conversations_with_sheets_data(force_load_spreadsheet: bool = False) -> 
                 # Convert to DataFrame
                 if matched_data:
                     merged_df = pd.DataFrame(matched_data)
+                    
+                    # DEBUG: Check archived column after merge
+                    if 'archived' in merged_df.columns:
+                        archived_values_after = merged_df['archived'].value_counts()
+                        debug_log(f"merged_df archived values after merge: {dict(archived_values_after)}")
+                        # Check specific phone number after merge
+                        phone_553184544605_after = merged_df[merged_df['phone_number'].str.contains('553184544605', na=False)]
+                        if not phone_553184544605_after.empty:
+                            debug_log(f"Phone 553184544605 archived status in merged_df: {phone_553184544605_after['archived'].iloc[0]}")
+                            debug_log(f"Phone 553184544605 full row columns: {list(phone_553184544605_after.columns)}")
+                            debug_log(f"Phone 553184544605 match_type: {phone_553184544605_after.get('match_type', ['N/A']).iloc[0]}")
+                    else:
+                        debug_log("No 'archived' column in merged_df")
                     
                     # Print matching statistics
                     total_matches = match_stats['exact'] + match_stats['last8']

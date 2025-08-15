@@ -28,10 +28,15 @@ from services.voxuy_api import send_whatsapp_message
 from services.familiares_loader import get_familiares_by_cpf, get_familiares_by_phone
 from services.background_operations import (
     queue_sync_operation,
-    queue_archive_operation,
     render_operations_sidebar,
     get_running_operations,
     background_manager
+)
+# Import new event-driven operations for archive functionality
+from services.event_driven_operations import (
+    queue_archive_operation as event_queue_archive_operation,
+    render_operations_sidebar as event_render_operations_sidebar,
+    update_pending_operations
 )
 from services.mega_data_set_loader import (
     get_properties_for_phone,
@@ -629,6 +634,68 @@ if "property_assignment_state" not in st.session_state:
         "filter_logic": "AND"
     }
 
+# ─── NAVIGATION CONTEXT PRESERVATION ────────────────────────────────────────
+# ★ GLOBAL RESTORE NAVIGATION CONTEXT - RUNS ON EVERY PAGE LOAD
+# This prevents filter cache loss when ANY st.rerun() is called
+if "_preserved_navigation_context" in st.session_state:
+    st.session_state.processor_navigation_context = st.session_state._preserved_navigation_context.copy()
+    
+    # ALWAYS log this (not just in DEBUG mode) so we can track it
+    preserved_count = len(st.session_state.processor_navigation_context.get('conversation_ids', []))
+    restore_message = f"🔄 RESTORE: Restored navigation context with {preserved_count} filtered conversations"
+    print(restore_message)
+    
+    # Also write to debug file
+    try:
+        with open("processor_context_debug.log", "a") as f:
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            f.write(f"[{timestamp}] {restore_message}\n")
+    except:
+        pass
+    
+    # Debug info will be shown later when DEBUG is defined
+    # Keep the preserved context for future restores (don't delete it)
+elif "_preserved_navigation_context" in st.session_state and "processor_navigation_context" in st.session_state:
+    # Both exist - ensure they're in sync (preserved context takes precedence)
+    if st.session_state._preserved_navigation_context != st.session_state.processor_navigation_context:
+        st.session_state.processor_navigation_context = st.session_state._preserved_navigation_context.copy()
+        print(f"🔄 SYNC: Synchronized navigation context with preserved version")
+        if DEBUG:
+            st.info("🔄 Synchronized navigation context with preserved version")
+else:
+    # Log what we found for debugging
+    has_preserved = "_preserved_navigation_context" in st.session_state
+    has_current = "processor_navigation_context" in st.session_state
+    # Write debug info to file so we can analyze it
+    debug_message = f"🔍 CONTEXT CHECK: preserved={has_preserved}, current={has_current}"
+    print(debug_message)
+    
+    # Also write to debug file
+    try:
+        with open("processor_context_debug.log", "a") as f:
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+            f.write(f"[{timestamp}] {debug_message}\n")
+    except:
+        pass
+    
+    if has_current:
+        current_count = len(st.session_state.processor_navigation_context.get('conversation_ids', []))
+        context_message = f"🔍 CURRENT CONTEXT: {current_count} conversations"
+        print(context_message)
+        
+        # Also write to debug file
+        try:
+            with open("processor_context_debug.log", "a") as f:
+                from datetime import datetime
+                timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                f.write(f"[{timestamp}] {context_message}\n")
+        except:
+            pass
+    
+    # Debug info will be shown later when DEBUG is defined
+    
 # ─── FLAGS ──────────────────────────────────────────────────────────────────
 DEV = True  # Set based on your environment
 
@@ -1758,27 +1825,63 @@ with nav_archive_col:
         key="archive_conversation",
         use_container_width=True,
     ):
-        # Get phone number from current row
+        # Get phone number and chat ID from current row
         phone_number = row.get("phone_number") or row.get("whatsapp_number", "")
         conversation_id = row.get("conversation_id", row.get("whatsapp_number", ""))
         
+        # Get chat ID from secrets (with fallback)
+        try:
+            chat_id = st.secrets.get("VOXUY_CHAT_ID", "07d49a4a-1b9c-4a02-847d-bad0fb3870eb")
+        except Exception:
+            chat_id = "07d49a4a-1b9c-4a02-847d-bad0fb3870eb"  # fallback
+        
         if phone_number:
-            # Queue archive operation in background
-            try:
-                operation_id = queue_archive_operation(phone_number, conversation_id)
+            # ★ PRESERVE NAVIGATION CONTEXT DURING ARCHIVE OPERATION
+            # Store navigation context before archive operation to prevent loss during auto-refresh
+            if "processor_navigation_context" in st.session_state:
+                st.session_state._preserved_navigation_context = st.session_state.processor_navigation_context.copy()
                 
-                # Show immediate feedback
-                st.success(f"✅ Archive queued! (Operation ID: {operation_id[:8]}...)")
-                st.info("📁 The conversation will be archived in the background. Check the sidebar for progress.")
+                # ALWAYS log this (not just in DEBUG mode) so we can track it
+                preserve_message = f"🔒 ARCHIVE: Preserved navigation context with {len(st.session_state._preserved_navigation_context.get('conversation_ids', []))} conversations"
+                print(preserve_message)
                 
-            except Exception as e:
-                st.error(f"❌ Error queueing archive operation: {e}")
+                # Also write to debug file
+                try:
+                    with open("processor_context_debug.log", "a") as f:
+                        from datetime import datetime
+                        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                        f.write(f"[{timestamp}] {preserve_message}\n")
+                except:
+                    pass
+                
                 if DEBUG:
-                    import traceback
-                    st.write("**Full error traceback:**")
-                    st.code(traceback.format_exc())
+                    st.write(f"🔒 Preserved navigation context: {len(st.session_state._preserved_navigation_context.get('conversation_ids', []))} conversations")
+                    st.write(f"🔒 Context details: {st.session_state._preserved_navigation_context}")
+            else:
+                print("⚠️ ARCHIVE: No processor_navigation_context found to preserve!")
+                if DEBUG:
+                    st.warning("⚠️ No navigation context found to preserve")
+            
+            # Use new event-driven architecture - fire and forget!
+            result = event_queue_archive_operation(phone_number, chat_id)
+            
+            if result["success"]:
+                # Show immediate success feedback
+                st.success(result["message"])
+                st.info("🚀 The conversation will be archived using our event-driven system. Check the sidebar for real-time progress!")
+                
+                # User can navigate immediately - no race condition!
+                if DEBUG:
+                    st.write(f"**Operation ID:** {result['operation_id']}")
+                    st.write(f"**Status URL:** {result.get('status_url', 'N/A')}")
+            else:
+                # Show error feedback
+                st.error(f"❌ {result['error']}")
+                if DEBUG and result.get('details'):
+                    st.write("**Error details:**")
+                    st.code(str(result['details']))
         else:
-            st.error("Número de telefone não encontrado para esta conversa.")
+            st.error("❌ Número de telefone não encontrado para esta conversa.")
 with nav_next_col:
     # Calculate next button disabled state based on navigation context
     next_disabled = False
@@ -2591,7 +2694,7 @@ with classification_container.container():
                     except:
                         button_help = f"Follow-up: {current_followup}"
             else:
-                button_text = "📅"
+                button_text = "📅∅"
                 button_help = "Definir data de follow-up"
     
             if st.button(button_text, key=f"calendar_btn_{idx}", help=button_help):
@@ -2709,6 +2812,7 @@ with classification_container.container():
                     if st.button("Limpar", key=f"clear_followup_{idx}"):
                         st.session_state[f"followup_date_{idx}"] = ""
                         st.session_state[f"followup_date_display_{idx}"] = ""
+                        st.session_state[f"show_followup_modal_{idx}"] = False
                         update_field(idx, "followup_date", "")
                         st.rerun()
     
@@ -4261,11 +4365,100 @@ except Exception as e:
     if DEBUG:
         st.sidebar.error(f"Error syncing background operations: {e}")
 
-# Render background operations status in sidebar
+# Render operations status in sidebar
 try:
+    # Update pending operations first (this polls Cloudflare Workers)
+    update_pending_operations()
+    
+    # Show new event-driven operations (archive, etc.)
+    event_render_operations_sidebar()
+    
+    # Show legacy background operations (sync, etc.) - will be phased out
     render_operations_sidebar()
+    
+    # Auto-refresh if there are pending operations
+    from services.event_driven_operations import get_pending_operations
+    pending_ops = get_pending_operations()
+    if pending_ops:
+        # ★ RESET CLEANUP TIMER: Reset cleanup timer when operations are active
+        if "_cleanup_timer" in st.session_state:
+            del st.session_state._cleanup_timer
+            if DEBUG:
+                print("🔄 RESET CLEANUP TIMER: Operations active, preserving context")
+        # Auto-refresh every 2 seconds when operations are running
+        import time
+        if 'last_operations_refresh' not in st.session_state:
+            st.session_state.last_operations_refresh = 0
+        
+        current_time = time.time()
+        time_since_last_refresh = current_time - st.session_state.last_operations_refresh
+        
+        # Show countdown in sidebar for user feedback
+        refresh_interval = 2.0  # 2 seconds
+        if time_since_last_refresh >= refresh_interval:
+            st.session_state.last_operations_refresh = current_time
+            
+            # ★ DEBUG: Log navigation context before auto-refresh
+            has_preserved = "_preserved_navigation_context" in st.session_state
+            has_current = "processor_navigation_context" in st.session_state
+            
+            auto_refresh_message = f"🔄 AUTO-REFRESH: About to call st.rerun() - preserved={has_preserved}, current={has_current}"
+            print(auto_refresh_message)
+            
+            # Also write to debug file
+            try:
+                with open("processor_context_debug.log", "a") as f:
+                    from datetime import datetime
+                    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                    f.write(f"[{timestamp}] {auto_refresh_message}\n")
+            except:
+                pass
+            
+            if has_preserved:
+                preserved_count = len(st.session_state._preserved_navigation_context.get('conversation_ids', []))
+                print(f"🔄 AUTO-REFRESH: Preserved context has {preserved_count} conversations")
+            
+            if has_current:
+                current_count = len(st.session_state.processor_navigation_context.get('conversation_ids', []))
+                print(f"🔄 AUTO-REFRESH: Current context has {current_count} conversations")
+            
+            print(f"🔄 AUTO-REFRESH: Updating {len(pending_ops)} pending operations")
+            st.rerun()
+        else:
+            # Show countdown
+            remaining = refresh_interval - time_since_last_refresh
+            st.sidebar.caption(f"🔄 Auto-refresh in {remaining:.1f}s")
+    else:
+        # ★ SMART CLEANUP: Only remove preserved context after a delay to ensure stability
+        if "_preserved_navigation_context" in st.session_state:
+            # Add a timestamp when we first detect no pending operations
+            if "_cleanup_timer" not in st.session_state:
+                st.session_state._cleanup_timer = time.time()
+                if DEBUG:
+                    print("🕐 CLEANUP TIMER: Started cleanup timer (no pending operations)")
+            else:
+                # Only cleanup after 30 seconds of no operations to ensure stability
+                time_since_no_ops = time.time() - st.session_state._cleanup_timer
+                if time_since_no_ops > 30:  # 30 seconds delay
+                    if DEBUG:
+                        print("🧹 CLEANUP: Removing preserved navigation context after 30s delay")
+                    del st.session_state._preserved_navigation_context
+                    del st.session_state._cleanup_timer
+                else:
+                    if DEBUG:
+                        remaining_cleanup = 30 - time_since_no_ops
+                        print(f"🕐 CLEANUP TIMER: Will cleanup in {remaining_cleanup:.1f}s")
+        else:
+            # Reset cleanup timer if no preserved context exists
+            if "_cleanup_timer" in st.session_state:
+                del st.session_state._cleanup_timer
+    
 except Exception as e:
     st.sidebar.error(f"Error displaying operations status: {e}")
+    if DEBUG:
+        import traceback
+        st.sidebar.write("**Full error traceback:**")
+        st.sidebar.code(traceback.format_exc())
 
 # ─── PROPERTY MODAL ─────────────────────────────────────────────────────────
 # Check if we need to show the property modal

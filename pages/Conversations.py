@@ -5,6 +5,10 @@ import pandas as pd
 from datetime import datetime
 import re
 
+# ─── START COMPREHENSIVE DEBUG LOGGING ─────────────────────────────────
+from services.debug_logger import debug_log
+debug_log("Conversations page loaded")
+
 from loaders.db_loader import (
     get_conversation_messages,
     get_conversation_details,

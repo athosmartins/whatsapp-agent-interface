@@ -5,6 +5,11 @@ from datetime import datetime
 
 import streamlit as st
 
+# ─── START COMPREHENSIVE DEBUG LOGGING ─────────────────────────────────
+from services.debug_logger import start_debug_logging, debug_log
+start_debug_logging()
+debug_log("App started - comprehensive debug logging active")
+
 from loaders.db_loader import get_dataframe
 from utils.ui_helpers import parse_imoveis
 from services.preloader import start_background_preload, display_preloader_status
@@ -122,8 +127,8 @@ def extract_addresses(imoveis_raw):
 
 
 # Apply transformations
-df["phone"] = df.get("whatsapp_number", "").apply(format_brazilian_phone)
-df["ENDERECO"] = df.get("IMOVEIS", "").apply(extract_addresses)
+df["phone"] = df["whatsapp_number"].apply(format_brazilian_phone) if "whatsapp_number" in df.columns else ""
+df["ENDERECO"] = df["IMOVEIS"].apply(extract_addresses) if "IMOVEIS" in df.columns else ""
 
 # ─── SELECT & VALIDATE COLUMNS ─────────────────────────────────────────────
 display_cols = [
@@ -229,6 +234,7 @@ st.write(
 try:
     import time
     from services.background_operations import global_storage, get_running_operations, render_operations_sidebar
+    from services.event_driven_operations import render_operations_sidebar as event_render_operations_sidebar, update_pending_operations
     
     global_storage.sync_to_session_state()
     
@@ -252,8 +258,39 @@ except Exception as e:
     if st.session_state.get("debug_mode", False):
         st.sidebar.error(f"Error syncing background operations: {e}")
 
-# Render background operations status in sidebar
+# Render operations status in sidebar
 try:
+    # Update pending operations first (polls Cloudflare Workers for status)
+    update_pending_operations()
+    
+    # Show new event-driven operations (archive, etc.)
+    event_render_operations_sidebar()
+    
+    # Show legacy background operations (sync, etc.)
     render_operations_sidebar()
+    
+    # Auto-refresh if there are pending operations
+    from services.event_driven_operations import get_pending_operations
+    pending_ops = get_pending_operations()
+    if pending_ops:
+        # Auto-refresh every 2 seconds when operations are running
+        import time
+        if 'last_operations_refresh' not in st.session_state:
+            st.session_state.last_operations_refresh = 0
+        
+        current_time = time.time()
+        time_since_last_refresh = current_time - st.session_state.last_operations_refresh
+        
+        # Show countdown in sidebar for user feedback
+        refresh_interval = 2.0  # 2 seconds
+        if time_since_last_refresh >= refresh_interval:
+            st.session_state.last_operations_refresh = current_time
+            print(f"🔄 AUTO-REFRESH: Updating {len(pending_ops)} pending operations")
+            st.rerun()
+        else:
+            # Show countdown
+            remaining = refresh_interval - time_since_last_refresh
+            st.sidebar.caption(f"🔄 Auto-refresh in {remaining:.1f}s")
+    
 except Exception as e:
     st.sidebar.error(f"Error displaying operations status: {e}")

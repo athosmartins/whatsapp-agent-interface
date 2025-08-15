@@ -10,10 +10,16 @@ __pycache__/
 app_gpt.py
 app_claude.py
 test.py
+cloudflare_workers/
+hex/
 
 # Claude Code IDE configuration (local only)
 .claude/
 CLAUDE.md
+
+# IDE and local configuration (local only)
+.kiro/
+.vscode/
 
 # Temporary analysis files (keep tests/ folder - it's permanent infrastructure)
 analysis_temp/
@@ -21,6 +27,8 @@ analysis_temp/
 *.log
 *_debug.log
 mega_data_debug.log
+tests/
+test_screenshots/
 
 # Python virtual environment
 .venv/
